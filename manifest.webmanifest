@@ -1,0 +1,14 @@
+{
+  "name": "Putzplan",
+  "short_name": "Putzplan",
+  "description": "Automatischer Putzplan für dein Zuhause",
+  "lang": "de",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f6fb",
+  "theme_color": "#4f8cff",
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
