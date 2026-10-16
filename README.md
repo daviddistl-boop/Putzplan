@@ -13,7 +13,9 @@ verteilt die Arbeit nach deinem Zeitbudget auf die Woche und sagt dir jeden Tag,
 - **Vorlagen** für Küche, Bad, Wohnzimmer, Schlafzimmer, Kinderzimmer, Flur, Balkon … mit sinnvollen Intervallen.
 - **Eigene Aufgaben** mit beliebigem Intervall (täglich bis jährlich oder „alle X Tage“), Dauer, Zuständigkeit und Pause-Funktion.
 - **Mehrere Personen** – faire Verteilung, feste Zuständigkeiten, freie Tage pro Person, Rangliste mit Punkten und Serie 🔥.
-- **Offline & installierbar** (PWA) – auf dem Handy „Zum Home-Bildschirm hinzufügen“.
+- **Tägliche Erinnerung** per Push-Benachrichtigung zur gewählten Uhrzeit – mit den Aufgaben des Tages,
+  auch wenn die App geschlossen ist (Android, iPhone ab iOS 16.4 als installierte App, Desktop).
+- **Als App installierbar** (PWA) – Symbol auf dem Startbildschirm, Vollbild, funktioniert offline.
 - **Datenschutz** – alle Daten bleiben lokal im Browser; Export/Import als JSON für Backups oder Gerätewechsel.
 
 ## Starten
@@ -29,6 +31,31 @@ Offline-Modus und Installation funktionieren aber nur über einen Webserver.)
 
 Zum Veröffentlichen reicht jeder statische Hoster, z. B. **GitHub Pages**: Repository → Settings → Pages →
 Branch auswählen. Danach die Seite auf dem Handy öffnen und zum Home-Bildschirm hinzufügen.
+
+## Aufs Handy bringen
+
+Die App muss einmal über **HTTPS** erreichbar sein, dann lässt sie sich installieren:
+
+1. Hosten, z. B. mit **GitHub Pages** (Settings → Pages → „Deploy from a branch“ → Branch und `/ (root)` wählen).
+   Für private Repositories braucht GitHub Pages ein kostenpflichtiges GitHub-Konto; alternativ
+   das Repository öffentlich machen oder den Ordner bei Netlify / Cloudflare Pages hochladen.
+2. Die Adresse auf dem Handy öffnen:
+   - **Android (Chrome):** Mehr → „Putzplan“ → Einstellungen → „Jetzt installieren“ bzw. Menü ⋮ → „App installieren“.
+   - **iPhone (Safari):** Teilen ⬆︎ → „Zum Home-Bildschirm“.
+3. Die installierte App öffnen → Mehr → **Tägliche Erinnerung** einschalten und Uhrzeit wählen.
+
+## Erinnerungen – so funktioniert's
+
+```
+Supabase Cron (alle 5 Min.) ──► Edge Function „push“ ──► Push-Dienst (Apple/Google/Mozilla) ──► Handy
+                                                                                      │
+                                       Service Worker berechnet die heutigen Aufgaben ◄┘ und zeigt sie an
+```
+
+- Auf dem Server (Supabase-Projekt „Putzplan“) liegen nur die Push-Adresse des Geräts, die Uhrzeit und die
+  Zeitzone – **keine Aufgaben**. Welche Aufgaben heute dran sind, berechnet das Handy selbst.
+- Code: `supabase/functions/push/index.ts` (Edge Function) und `supabase/migrations/` (Tabellen + Cron-Job).
+- Die Adresse der Funktion steht in `shared.js` (`PUSH_API`).
 
 ## Tests
 
@@ -52,4 +79,6 @@ wiederkehrende Aufgaben im Wochenplan korrekt erneut auftauchen. Die Logik steck
 | `scheduler.js` | Planungslogik (Fälligkeit, Wochenplan, Verteilung auf Personen) |
 | `templates.js` | Raum- und Aufgabenvorlagen |
 | `styles.css` | Design inkl. Dark Mode |
-| `sw.js`, `manifest.webmanifest` | Offline-Unterstützung und Installation als App |
+| `shared.js` | Von App und Service Worker gemeinsam genutzt (IndexedDB, Erinnerungstext) |
+| `sw.js`, `manifest.webmanifest`, `icons/` | Offline-Unterstützung, Push-Empfang, Installation als App |
+| `supabase/` | Server für die täglichen Erinnerungen |

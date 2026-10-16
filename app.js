@@ -4,6 +4,7 @@
 
   const S = window.Scheduler;
   const T = window.Templates;
+  const Shared = window.PutzplanShared;
   const STORAGE_KEY = 'putzplan.v1';
   const WEEKDAYS = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
   const WEEKDAYS_SHORT = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
@@ -41,6 +42,13 @@
     } catch (e) {
       toast('Speichern fehlgeschlagen – ist der Speicher voll?');
     }
+    syncToServiceWorker();
+  }
+
+  // Kopie für den Service Worker, damit die Erinnerung die heutigen Aufgaben kennt.
+  function syncToServiceWorker() {
+    if (!('indexedDB' in window)) return;
+    Shared.kvSet('state', state).catch(() => {});
   }
 
   function uid() {
@@ -221,6 +229,13 @@
         <div class="ring" style="--p:${pct}"><span>${pct}%</span></div>
       </header>`;
 
+    if (!isStandalone() && !state.settings.installHintDismissed) {
+      html += `<div class="hint"><span>📲</span><div class="grow"><strong>Putzplan als App installieren</strong><br>
+        <span class="muted small">Mit Symbol auf dem Startbildschirm und täglicher Erinnerung.</span></div>
+        <button class="btn primary" data-action="go" data-tab="settings">Los</button>
+        <button class="icon-btn" data-action="dismiss-install" title="Ausblenden">✕</button></div>`;
+    }
+
     if (!state.tasks.length) {
       html += `<div class="empty"><p>Noch keine Aufgaben angelegt.</p><button class="btn primary" data-action="go" data-tab="rooms">Räume einrichten</button></div>`;
       return html;
@@ -400,6 +415,8 @@
     const b = state.settings.minutesPerWeekday;
     return `
       <header class="page-head"><h1>Einstellungen</h1></header>
+      ${installCard()}
+      ${reminderCard()}
       <section class="card">
         <h2>Zeitbudget pro Tag</h2>
         <p class="muted small">Wie viele Minuten möchtest du an welchem Tag putzen? Der Plan verteilt die Aufgaben automatisch. 0 = freier Tag.</p>
@@ -670,6 +687,174 @@
     });
   }
 
+  // ---------------------------------------------------------------- Installation & Erinnerungen
+
+  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const pushSupported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  let installPrompt = null;
+
+  function isStandalone() {
+    return window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  }
+
+  function reminder() {
+    if (!state.settings.reminder) state.settings.reminder = { enabled: false, time: '08:00' };
+    return state.settings.reminder;
+  }
+
+  function installCard() {
+    if (isStandalone()) return '';
+    let how;
+    if (installPrompt) {
+      how = '<button class="btn primary block" data-action="install">📲 Jetzt installieren</button>';
+    } else if (isIOS) {
+      how = `<ol class="steps">
+          <li>Diese Seite in <strong>Safari</strong> öffnen</li>
+          <li>Unten auf <strong>Teilen</strong> <span class="kbd">⬆︎</span> tippen</li>
+          <li><strong>„Zum Home-Bildschirm“</strong> wählen und <strong>Hinzufügen</strong></li>
+          <li>Putzplan über das neue Symbol öffnen – dann gehen auch Erinnerungen</li></ol>`;
+    } else {
+      how = `<ol class="steps">
+          <li>Browser-Menü <span class="kbd">⋮</span> öffnen</li>
+          <li><strong>„App installieren“</strong> bzw. <strong>„Zum Startbildschirm hinzufügen“</strong> wählen</li></ol>`;
+    }
+    return `<section class="card">
+        <h2>📲 Als App installieren</h2>
+        <p class="muted small">Putzplan landet als Symbol auf deinem Startbildschirm, startet ohne Browserleiste und funktioniert offline.</p>
+        ${how}
+      </section>`;
+  }
+
+  function reminderCard() {
+    const r = reminder();
+    let note = '';
+    if (!pushSupported) {
+      note = isIOS && !isStandalone()
+        ? '<p class="note">Auf iPhone/iPad funktionieren Erinnerungen nur in der installierten App (iOS 16.4 oder neuer). Installiere Putzplan zuerst wie oben beschrieben.</p>'
+        : '<p class="note">Dieser Browser unterstützt leider keine Push-Benachrichtigungen.</p>';
+    } else if (Notification.permission === 'denied') {
+      note = '<p class="note">Benachrichtigungen sind für Putzplan blockiert. Erlaube sie in den Einstellungen deines Browsers bzw. Handys.</p>';
+    }
+    let preview = '';
+    if (state.tasks.length) {
+      const msg = Shared.reminderMessage(state, S);
+      preview = `<div class="notif-preview"><img src="icons/icon-192.png" alt=""><div><strong>${esc(msg.title)}</strong><br><span>${esc(msg.body).replace(/\n/g, '<br>')}</span></div></div>`;
+    }
+    return `<section class="card">
+        <h2>🔔 Tägliche Erinnerung</h2>
+        <p class="muted small">Jeden Tag zur gewählten Uhrzeit eine Benachrichtigung mit deinen Aufgaben für heute – auch wenn die App geschlossen ist.</p>
+        <label class="switch-row">
+          <span>Erinnerung ${r.enabled ? 'an' : 'aus'}</span>
+          <input type="checkbox" class="switch" data-reminder-toggle ${r.enabled ? 'checked' : ''} ${pushSupported && !ui.reminderBusy ? '' : 'disabled'}>
+        </label>
+        <label class="switch-row">
+          <span>Uhrzeit</span>
+          <input type="time" class="input time-input" value="${r.time}" data-reminder-time ${ui.reminderBusy ? 'disabled' : ''}>
+        </label>
+        ${note}
+        ${r.enabled ? '<button class="btn block" data-action="reminder-test">Test-Benachrichtigung senden</button>' : ''}
+        ${preview ? `<p class="muted small">So sieht die Erinnerung heute aus:</p>${preview}` : ''}
+      </section>`;
+  }
+
+  async function pushApi(path, body) {
+    const res = await fetch(Shared.PUSH_API + path, body
+      ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+      : {});
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
+  }
+
+  function base64UrlToBytes(b64) {
+    const pad = '='.repeat((4 - (b64.length % 4)) % 4);
+    const raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
+    return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+  }
+
+  async function pushSubscription(create) {
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub && create) {
+      const { publicKey } = await pushApi('/config');
+      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: base64UrlToBytes(publicKey) });
+    }
+    return sub;
+  }
+
+  async function registerReminder() {
+    const sub = await pushSubscription(true);
+    await pushApi('/subscribe', {
+      subscription: sub.toJSON(),
+      time: reminder().time,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Berlin',
+    });
+  }
+
+  async function withBusy(fn) {
+    ui.reminderBusy = true;
+    render();
+    try {
+      await fn();
+    } catch (e) {
+      console.warn(e);
+      toast('Das hat nicht geklappt – bist du online? (' + e.message + ')');
+    } finally {
+      ui.reminderBusy = false;
+      render();
+    }
+  }
+
+  function enableReminder() {
+    return withBusy(async () => {
+      if (!pushSupported) throw new Error('nicht unterstützt');
+      const perm = await Notification.requestPermission();
+      if (perm !== 'granted') {
+        toast('Ohne Erlaubnis für Benachrichtigungen geht es leider nicht.');
+        return;
+      }
+      await registerReminder();
+      reminder().enabled = true;
+      save();
+      toast(`Erinnerung aktiv – täglich um ${reminder().time} Uhr 🔔`);
+    });
+  }
+
+  function disableReminder() {
+    return withBusy(async () => {
+      reminder().enabled = false;
+      save();
+      const sub = await pushSubscription(false);
+      if (sub) {
+        await pushApi('/unsubscribe', { endpoint: sub.endpoint }).catch(() => {});
+        await sub.unsubscribe();
+      }
+      toast('Erinnerung ausgeschaltet');
+    });
+  }
+
+  // Beim Start den Server abgleichen (z. B. neue Zeitzone oder vom Browser erneuertes Abo).
+  async function resyncReminder() {
+    if (!reminder().enabled || !pushSupported || Notification.permission !== 'granted') return;
+    try {
+      await registerReminder();
+    } catch (e) {
+      console.warn('Erinnerung konnte nicht abgeglichen werden', e);
+    }
+  }
+
+  window.addEventListener('beforeinstallprompt', (ev) => {
+    ev.preventDefault();
+    installPrompt = ev;
+    if (ui.tab === 'settings') render();
+  });
+
+  window.addEventListener('appinstalled', () => {
+    installPrompt = null;
+    toast('Putzplan wurde installiert 🎉');
+    render();
+  });
+
   // ---------------------------------------------------------------- Import / Export
 
   function exportData() {
@@ -758,6 +943,21 @@
       case 'edit-member': editMember(id); break;
       case 'export': exportData(); break;
       case 'import': importData(); break;
+      case 'install':
+        if (installPrompt) {
+          installPrompt.prompt();
+          installPrompt.userChoice.finally(() => { installPrompt = null; render(); });
+        }
+        break;
+      case 'dismiss-install': state.settings.installHintDismissed = true; save(); render(); break;
+      case 'reminder-test':
+        withBusy(async () => {
+          const sub = await pushSubscription(false);
+          if (!sub) throw new Error('Gerät nicht angemeldet');
+          await pushApi('/test', { endpoint: sub.endpoint });
+          toast('Test-Benachrichtigung ist unterwegs 📬');
+        });
+        break;
       case 'reset':
         if (confirm('Wirklich alle Räume, Aufgaben und den Verlauf löschen?')) {
           state = defaultState(); ui = { tab: 'today' }; save(); render();
@@ -792,6 +992,20 @@
       save();
       toast('Zeitbudget gespeichert – der Plan wurde angepasst.');
     }
+    if (t.dataset.reminderToggle !== undefined) {
+      if (t.checked) enableReminder();
+      else disableReminder();
+    }
+    if (t.dataset.reminderTime !== undefined && /^\d\d:\d\d$/.test(t.value)) {
+      reminder().time = t.value;
+      save();
+      if (reminder().enabled) {
+        withBusy(async () => {
+          await registerReminder();
+          toast(`Erinnerung jetzt täglich um ${t.value} Uhr`);
+        });
+      }
+    }
   });
 
   document.addEventListener('keydown', (ev) => {
@@ -808,8 +1022,9 @@
   });
 
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+    navigator.serviceWorker.register('sw.js').then(resyncReminder).catch(() => {});
   }
 
+  syncToServiceWorker();
   render();
 })();
