@@ -140,3 +140,26 @@ test('bonusCandidates: dringendste passende Aufgabe zuerst', () => {
   const ids = S.bonusCandidates(state(tasks), MONDAY, ['e'], 10).map((t) => t.id);
   assert.deepStrictEqual(ids, ['b', 'a']);
 });
+
+test('floorType erkennt Boden-Aufgaben am Namen', () => {
+  const f = (name, extra) => S.floorType(Object.assign({ name }, extra));
+  assert.strictEqual(f('Staubsaugen'), 'vacuum');
+  assert.strictEqual(f('Boden wischen'), 'mop');
+  assert.strictEqual(f('Staub wischen'), '');
+  assert.strictEqual(f('Sofa absaugen'), '');
+  assert.strictEqual(f('Fliesen putzen', { floor: 'mop' }), 'mop');
+  assert.strictEqual(f('Staubsaugen', { floor: '' }), '');
+});
+
+test('Roboter übernimmt Boden-Aufgaben – außer in ausgenommenen Räumen', () => {
+  const tasks = [
+    mkTask('saugen', 7, 10, MONDAY - 9, { name: 'Staubsaugen', roomId: 'wohn' }),
+    mkTask('wischen', 7, 10, MONDAY - 9, { name: 'Boden wischen', roomId: 'wohn' }),
+    mkTask('saugen2', 7, 10, MONDAY - 9, { name: 'Staubsaugen', roomId: 'oben' }),
+  ];
+  const settings = { minutesPerWeekday: [60, 60, 60, 60, 60, 60, 60], robot: { vacuum: true, mop: false, excludedRooms: ['oben'] } };
+  const [day] = S.planDays({ tasks, members: [], settings }, MONDAY, 1);
+  assert.deepStrictEqual(day.items.map((i) => i.task.id).sort(), ['saugen2', 'wischen']);
+  // Roboter-Aufgaben zählen nicht in die Sauberkeit des Raums.
+  assert.strictEqual(S.roomCleanliness([tasks[0]], MONDAY, settings), 100);
+});

@@ -112,7 +112,16 @@
     },
   ];
 
-  const ROOM_ICONS = ['🍳', '🛁', '🚽', '🛋️', '🛏️', '🧸', '💻', '🚪', '🧺', '🌿', '🏠', '🚗', '🐶', '🪴', '📚', '🍽️'];
+  // Wartung für Saug- und Wischroboter: [Schlüssel, Name, Intervall, Dauer, benötigter Robotertyp]
+  const ROBOT_TASKS = [
+    ['bin', 'Staubbehälter leeren', 3, 2, 'vacuum'],
+    ['brush', 'Bürsten & Filter reinigen', 14, 10, 'vacuum'],
+    ['sensors', 'Sensoren & Räder abwischen', 30, 5, 'vacuum'],
+    ['tank', 'Wassertank auffüllen & Wischpads waschen', 3, 5, 'mop'],
+    ['station', 'Station & Schmutzwassertank reinigen', 14, 10, 'mop'],
+  ];
+
+  const ROOM_ICONS = ['🤖', '🍳', '🛁', '🚽', '🛋️', '🛏️', '🧸', '💻', '🚪', '🧺', '🌿', '🏠', '🚗', '🐶', '🪴', '📚', '🍽️'];
 
   const INTERVALS = [
     [1, 'Täglich'],
@@ -130,7 +139,7 @@
 
   const MEMBER_COLORS = ['#4f8cff', '#ff7a59', '#2fbf71', '#b06cff', '#f5b700', '#ff5c8a'];
 
-  const api = { ROOM_TEMPLATES, ROOM_ICONS, INTERVALS, MEMBER_COLORS };
+  const api = { ROOM_TEMPLATES, ROBOT_TASKS, ROOM_ICONS, INTERVALS, MEMBER_COLORS };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Templates = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

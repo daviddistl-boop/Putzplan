@@ -307,3 +307,10 @@ h2 { font-size: 1.05rem; margin: 1.4em 0 0.6em; }
 .check.checked { background: var(--good); border-color: var(--good); }
 .badge.good { background: color-mix(in srgb, var(--good) 18%, transparent); color: var(--good); }
 .learned { margin: -4px 0 0; color: var(--muted); }
+
+/* Roboter */
+.row.robot { opacity: 0.7; }
+.robot-check { border: 0; background: var(--surface-2); font-size: 1rem; }
+.onboard-robot { text-align: left; background: var(--surface); border-radius: var(--radius); padding: 4px 16px 8px; margin-top: 8px; }
+.onboard-robot p { margin: 10px 0 4px; }
+.onboard-robot .switch-row:last-child { border-bottom: 0; }

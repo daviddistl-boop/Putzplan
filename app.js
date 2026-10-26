@@ -573,7 +573,7 @@
     const plannedIds = new Set(plan.items.map((i) => i.task.id));
     const doneIds = new Set(doneEntries.map((h) => h.taskId));
     const extra = state.tasks
-      .filter((t) => S.isActive(t, today) && !plannedIds.has(t.id) && !doneIds.has(t.id) && S.urgency(t, today) >= 1)
+      .filter((t) => S.isPlannable(t, today, state.settings) && !plannedIds.has(t.id) && !doneIds.has(t.id) && S.urgency(t, today) >= 1)
       .sort((a, b) => S.urgency(b, today) - S.urgency(a, today));
 
     const doneMin = doneEntries.reduce((s, h) => s + h.minutes, 0);
@@ -680,8 +680,8 @@
     if (ui.roomId && room(ui.roomId)) return viewRoom(room(ui.roomId));
     const cards = state.rooms.map((r) => {
       const tasks = state.tasks.filter((t) => t.roomId === r.id);
-      const pct = S.roomCleanliness(tasks, today);
-      const due = tasks.filter((t) => S.isActive(t, today) && S.urgency(t, today) >= 1).length;
+      const pct = S.roomCleanliness(tasks, today, state.settings);
+      const due = tasks.filter((t) => S.isPlannable(t, today, state.settings) && S.urgency(t, today) >= 1).length;
       return `<button class="room-card" data-action="open-room" data-id="${r.id}">
         <span class="room-emoji">${r.icon}</span>
         <span class="room-name">${esc(r.name)}</span>
@@ -691,7 +691,7 @@
       </button>`;
     }).join('');
     const avg = state.rooms.length
-      ? Math.round(state.rooms.reduce((s, r) => s + S.roomCleanliness(state.tasks.filter((t) => t.roomId === r.id), today), 0) / state.rooms.length)
+      ? Math.round(state.rooms.reduce((s, r) => s + S.roomCleanliness(state.tasks.filter((t) => t.roomId === r.id), today, state.settings), 0) / state.rooms.length)
       : 100;
     return `
       <header class="page-head"><h1>Räume</h1><p class="muted">Dein Zuhause ist zu <strong>${avg}%</strong> sauber.</p></header>
@@ -704,7 +704,7 @@
     const today = S.today();
     const tasks = state.tasks.filter((t) => t.roomId === r.id)
       .sort((a, b) => S.dueDay(a) - S.dueDay(b));
-    const pct = S.roomCleanliness(tasks, today);
+    const pct = S.roomCleanliness(tasks, today, state.settings);
     return `
       <header class="page-head">
         <button class="link" data-action="close-room">‹ Alle Räume</button>
@@ -715,6 +715,15 @@
       </header>
       <ul class="list">${tasks.map((t) => {
         const u = S.urgency(t, today);
+        if (S.robotHandles(t, state.settings)) {
+          return `<li class="row robot">
+          <span class="check robot-check" aria-hidden="true">🤖</span>
+          <div class="row-main" data-action="edit-task" data-id="${t.id}">
+            <div class="row-title">${esc(t.name)}</div>
+            <div class="row-sub">Macht der ${t && S.floorType(t) === 'mop' ? 'Wischroboter' : 'Saugroboter'} – nicht im Putzplan</div>
+          </div>
+        </li>`;
+        }
         const overdue = !t.paused && S.dueDay(t) <= today;
         return `<li class="row ${t.paused ? 'paused' : ''}">
           <button class="check" data-action="complete" data-id="${t.id}" data-member="${t.assignee || ''}" title="Jetzt erledigt"></button>
@@ -786,6 +795,7 @@
       <header class="page-head"><h1>Einstellungen</h1></header>
       ${installCard()}
       ${reminderCard()}
+      ${robotCard()}
       <section class="card">
         <h2>Zeitbudget pro Tag</h2>
         <p class="muted small">Wie viele Minuten möchtest du an welchem Tag putzen? Der Plan verteilt die Aufgaben automatisch. 0 = freier Tag.</p>
@@ -847,6 +857,11 @@
         <p class="muted">Pro Werktag – am Samstag planen wir das Dreifache ein, der Sonntag bleibt frei. Das kannst du später für jeden Tag einzeln ändern.</p>
         <div class="slider-val"><strong id="min-val">${minutes}</strong> Minuten pro Tag</div>
         <input type="range" min="5" max="120" step="5" value="${minutes}" data-onboard-minutes class="slider">
+        <div class="onboard-robot">
+          <p><strong>🤖 Hast du einen Roboter?</strong><br><span class="muted small">Dann lassen wir Saugen bzw. Wischen weg.</span></p>
+          <label class="switch-row"><span>Saugroboter</span><input type="checkbox" class="switch" data-onboard-robot="vacuum" ${ui.onboardRobot && ui.onboardRobot.vacuum ? 'checked' : ''}></label>
+          <label class="switch-row"><span>Wischroboter</span><input type="checkbox" class="switch" data-onboard-robot="mop" ${ui.onboardRobot && ui.onboardRobot.mop ? 'checked' : ''}></label>
+        </div>
         <button class="btn primary block" data-action="onboard-finish">Putzplan erstellen ✨</button>
       </div>`;
   }
@@ -913,6 +928,9 @@
         <label>Dauer (Minuten)<input class="input" type="number" min="1" max="480" name="minutes" value="${t.minutes}"></label>
         ${t.learnedMinutes ? `<p class="small learned">⏱ Gelernt aus ${t.durations.length} Messung${t.durations.length === 1 ? '' : 'en'}: du brauchst ca. <strong>${fmtMinutes(t.learnedMinutes)}</strong>.
           Der Plan rechnet damit. Änderst du die Dauer oben, wird neu gelernt.</p>` : ''}
+        ${robotEnabled() ? `<label>Bodenreinigung<select class="input" name="floor">
+          ${[['', 'Keine Bodenaufgabe'], ['vacuum', 'Staubsaugen (Saugroboter)'], ['mop', 'Boden wischen (Wischroboter)']]
+            .map(([v, l]) => `<option value="${v}" ${S.floorType(t) === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>` : ''}
         ${state.members.length ? `<label>Zuständig<select class="input" name="assignee">${memberOptions(t.assignee, 'Automatisch verteilen')}</select></label>` : ''}
         ${taskId ? `<label class="check-label"><input type="checkbox" name="paused" ${t.paused ? 'checked' : ''}> Pausieren (z. B. im Urlaub)</label>` : `
           <label>Zuletzt erledigt<select class="input" name="last">
@@ -945,6 +963,7 @@
           assignee: form.assignee ? form.assignee.value || null : null,
         };
         if (!data.name) return;
+        if (form.floor) data.floor = form.floor.value;
         if (taskId) {
           if (data.minutes !== t.minutes) { delete t.learnedMinutes; delete t.durations; }
           Object.assign(t, data, { paused: form.paused.checked });
@@ -1057,6 +1076,84 @@
         save(); closeModal(); render();
       };
     });
+  }
+
+  // ---------------------------------------------------------------- Saug- & Wischroboter
+
+  function robot() {
+    if (!state.settings.robot) state.settings.robot = { vacuum: false, mop: false, excludedRooms: [] };
+    return state.settings.robot;
+  }
+
+  function robotEnabled() {
+    const r = state.settings.robot;
+    return !!(r && (r.vacuum || r.mop));
+  }
+
+  /**
+   * Legt die Wartungsaufgaben für den Roboter an (eigener Raum „Roboter“) bzw.
+   * pausiert sie, wenn der passende Roboter ausgeschaltet wird.
+   */
+  function syncRobotTasks() {
+    const r = robot();
+    let robotRoom = state.rooms.find((x) => x.robot);
+    if (!robotRoom && !robotEnabled()) return;
+    if (!robotRoom) {
+      robotRoom = { id: uid(), name: 'Roboter', icon: '🤖', robot: true };
+      state.rooms.push(robotRoom);
+    }
+    const today = S.today();
+    for (const [key, name, interval, minutes, type] of T.ROBOT_TASKS) {
+      const existing = state.tasks.find((t) => t.robotKey === key);
+      if (existing) existing.paused = !r[type];
+      else if (r[type]) {
+        state.tasks.push({
+          id: uid(), roomId: robotRoom.id, name, interval, minutes, robotKey: key, floor: '',
+          lastDone: today - Math.floor(interval / 2), assignee: null, paused: false, snoozedUntil: null,
+        });
+      }
+    }
+  }
+
+  function robotCard() {
+    const r = robot();
+    const floorRooms = state.rooms.filter((rm) => !rm.robot && state.tasks.some((t) => t.roomId === rm.id && S.floorType(t)));
+    const covered = (rm) => !(r.excludedRooms || []).includes(rm.id);
+    const handled = state.tasks.filter((t) => S.robotHandles(t, state.settings));
+    const savedMin = handled.reduce((sum, t) => sum + (S.estimate(t) * 7) / t.interval, 0);
+    return `<section class="card">
+        <h2>🤖 Saug- & Wischroboter</h2>
+        <p class="muted small">Hast du einen Roboter, fallen Staubsaugen bzw. Boden wischen aus deinem Putzplan.
+          Dafür kommen kurze Wartungsaufgaben dazu (Behälter leeren, Bürsten reinigen …).</p>
+        <label class="switch-row"><span>Saugroboter</span>
+          <input type="checkbox" class="switch" data-robot="vacuum" ${r.vacuum ? 'checked' : ''}></label>
+        <label class="switch-row"><span>Wischroboter</span>
+          <input type="checkbox" class="switch" data-robot="mop" ${r.mop ? 'checked' : ''}></label>
+        ${robotEnabled() && floorRooms.length ? `
+          <p class="small muted">In welchen Räumen fährt der Roboter?</p>
+          <div class="chip-grid">${floorRooms.map((rm) => `<button class="chip ${covered(rm) ? 'on' : ''}" data-action="robot-room" data-id="${rm.id}">${rm.icon} ${esc(rm.name)}</button>`).join('')}</div>` : ''}
+        ${robotEnabled() ? `<p class="small">✨ Der Roboter übernimmt <strong>${handled.length} Aufgabe${handled.length === 1 ? '' : 'n'}</strong>
+          – das spart dir ca. <strong>${fmtMinutes(Math.round(savedMin))}</strong> pro Woche.</p>` : ''}
+      </section>`;
+  }
+
+  function setRobot(type, on) {
+    robot()[type] = on;
+    syncRobotTasks();
+    save();
+    render();
+    toast(on ? `${type === 'mop' ? 'Wischroboter' : 'Saugroboter'} aktiv – Boden-Aufgaben sind raus aus dem Plan 🤖`
+      : `${type === 'mop' ? 'Wischroboter' : 'Saugroboter'} aus – Boden-Aufgaben sind wieder im Plan`);
+  }
+
+  function toggleRobotRoom(roomId) {
+    const r = robot();
+    const list = (r.excludedRooms || []).slice();
+    const idx = list.indexOf(roomId);
+    if (idx >= 0) list.splice(idx, 1); else list.push(roomId);
+    r.excludedRooms = list;
+    save();
+    render();
   }
 
   // ---------------------------------------------------------------- Installation & Erinnerungen
@@ -1328,6 +1425,9 @@
     });
     const m = ui.onboardMinutes || 20;
     state.settings.minutesPerWeekday = [m, m, m, m, m, m * 3, 0];
+    const rb = ui.onboardRobot || {};
+    state.settings.robot = { vacuum: !!rb.vacuum, mop: !!rb.mop, excludedRooms: [] };
+    syncRobotTasks();
     state.onboarded = true;
     ui = { tab: 'today', roomId: null, showMore: false };
     save();
@@ -1370,6 +1470,7 @@
         }
         break;
       case 'dismiss-install': state.settings.installHintDismissed = true; save(); render(); break;
+      case 'robot-room': toggleRobotRoom(id); break;
       case 'session-start': startSessionDialog(); break;
       case 'session-toggle': sessionToggle(id); break;
       case 'session-pause': togglePause(); break;
@@ -1428,6 +1529,11 @@
       state.settings.minutesPerWeekday[+t.dataset.budget] = Math.max(0, parseInt(t.value, 10) || 0);
       save();
       toast('Zeitbudget gespeichert – der Plan wurde angepasst.');
+    }
+    if (t.dataset.robot) setRobot(t.dataset.robot, t.checked);
+    if (t.dataset.onboardRobot) {
+      ui.onboardRobot = ui.onboardRobot || {};
+      ui.onboardRobot[t.dataset.onboardRobot] = t.checked;
     }
     if (t.dataset.reminderToggle !== undefined) {
       if (t.checked) enableReminder();

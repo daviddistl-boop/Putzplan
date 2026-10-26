@@ -52,6 +52,33 @@
     return !task.paused && !(task.snoozedUntil && task.snoozedUntil > day);
   }
 
+  /**
+   * Art der Bodenreinigung einer Aufgabe: 'vacuum' (saugen), 'mop' (wischen) oder ''.
+   * Eine ausdrückliche Angabe (task.floor) hat Vorrang, sonst wird am Namen erkannt –
+   * „Sofa absaugen“ oder „Staub wischen“ sind keine Bodenaufgaben.
+   */
+  function floorType(task) {
+    if (typeof task.floor === 'string') return task.floor;
+    const name = (task.name || '').toLowerCase();
+    if (/(^|\s)(staub)?saugen\b/.test(name) && !/absaugen|sofa|matratze|polster/.test(name)) return 'vacuum';
+    if (/boden.*(wischen|feucht)|wischen.*boden/.test(name)) return 'mop';
+    return '';
+  }
+
+  /** Übernimmt ein Saug- bzw. Wischroboter diese Aufgabe? */
+  function robotHandles(task, settings) {
+    const robot = settings && settings.robot;
+    if (!robot) return false;
+    const type = floorType(task);
+    if (!type || !robot[type]) return false;
+    return !(robot.excludedRooms || []).includes(task.roomId);
+  }
+
+  /** Aufgabe soll an diesem Tag von Hand eingeplant werden. */
+  function isPlannable(task, day, settings) {
+    return isActive(task, day) && !robotHandles(task, settings);
+  }
+
   // Gelernte Dauern: so viele Messungen werden höchstens berücksichtigt.
   const MAX_SAMPLES = 5;
 
@@ -85,7 +112,7 @@
   function bonusCandidates(state, day, excludeIds, maxMinutes) {
     const exclude = new Set(excludeIds || []);
     return (state.tasks || [])
-      .filter((t) => isActive(t, day) && !exclude.has(t.id) && estimate(t) <= maxMinutes)
+      .filter((t) => isPlannable(t, day, state.settings) && !exclude.has(t.id) && estimate(t) <= maxMinutes)
       .map((t) => ({ task: t, u: urgency(t, day) }))
       .filter((e) => e.u >= 0.5)
       .sort((a, b) => b.u - a.u)
@@ -141,7 +168,7 @@
         for (const t of tasks) if (done.has(t.id)) budget -= estimate(t);
       }
 
-      const eligible = tasks.filter((t) => isActive(t, day) && !(i === 0 && done.has(t.id)));
+      const eligible = tasks.filter((t) => isPlannable(t, day, settings) && !(i === 0 && done.has(t.id)));
       const scored = eligible
         .map((t) => ({ task: t, u: urgency(t, day, sim.get(t.id)) }))
         .sort((a, b) => b.u - a.u || a.task.interval - b.task.interval);
@@ -177,9 +204,9 @@
     return plan;
   }
 
-  /** Sauberkeit eines Raums in Prozent (100 = alles frisch geputzt). */
-  function roomCleanliness(tasks, day) {
-    const active = tasks.filter((t) => !t.paused);
+  /** Sauberkeit eines Raums in Prozent (100 = alles frisch geputzt). Roboter-Aufgaben zählen nicht mit. */
+  function roomCleanliness(tasks, day, settings) {
+    const active = tasks.filter((t) => !t.paused && !robotHandles(t, settings));
     if (!active.length) return 100;
     const sum = active.reduce((s, t) => s + Math.min(1, urgency(t, day)), 0);
     return Math.round((1 - sum / active.length) * 100);
@@ -193,6 +220,9 @@
     urgency,
     dueDay,
     isActive,
+    floorType,
+    robotHandles,
+    isPlannable,
     budgetFor,
     estimate,
     recordDuration,
