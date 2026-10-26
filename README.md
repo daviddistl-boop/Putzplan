@@ -32,7 +32,34 @@ Offline-Modus und Installation funktionieren aber nur über einen Webserver.)
 Zum Veröffentlichen reicht jeder statische Hoster, z. B. **GitHub Pages**: Repository → Settings → Pages →
 Branch auswählen. Danach die Seite auf dem Handy öffnen und zum Home-Bildschirm hinzufügen.
 
-## Aufs Handy bringen
+## Android-App
+
+Im Ordner `android/` liegt eine native Android-App (Capacitor), die genau diese Web-App enthält.
+
+- **Daten bleiben auf dem Handy**: im App-Speicher plus Sicherungsdatei im privaten Bereich der App.
+  Es gibt kein Konto und keinen Server.
+- **Erinnerungen** kommen als lokale Benachrichtigungen vom Handy selbst, auch offline.
+  Für die nächsten 30 Tage wird jeweils der Plan des Tages eingeplant; bei jedem Öffnen wird neu geplant.
+- **Installieren**: Unter *Releases* die neueste `Putzplan.apk` herunterladen, auf dem Handy öffnen und
+  „Aus dieser Quelle installieren“ erlauben. Updates einfach drüberinstallieren.
+
+### Bauen
+
+Jeder Push baut über GitHub Actions (`.github/workflows/android.yml`) eine APK und veröffentlicht sie als Release.
+Damit Updates sich drüberinstallieren lassen, braucht der Build immer denselben Signaturschlüssel –
+hinterlege ihn einmalig unter *Settings → Secrets and variables → Actions*:
+
+| Secret | Inhalt |
+| --- | --- |
+| `ANDROID_KEYSTORE_BASE64` | Keystore-Datei (`.jks`), base64-kodiert |
+| `ANDROID_KEYSTORE_PASSWORD` | Passwort des Keystores (Alias `putzplan`) |
+
+Ohne diese Secrets wird mit einem wechselnden Debug-Schlüssel signiert (installierbar, aber nicht update-fähig).
+
+Lokal (mit Android SDK): `npm install && npm run android:sync && cd android && ./gradlew assembleRelease`.
+Nach Änderungen an der Web-App immer `npm run android:sync` ausführen.
+
+## Als Web-App aufs Handy bringen
 
 Die App muss einmal über **HTTPS** erreichbar sein, dann lässt sie sich installieren:
 
@@ -79,6 +106,8 @@ wiederkehrende Aufgaben im Wochenplan korrekt erneut auftauchen. Die Logik steck
 | `scheduler.js` | Planungslogik (Fälligkeit, Wochenplan, Verteilung auf Personen) |
 | `templates.js` | Raum- und Aufgabenvorlagen |
 | `styles.css` | Design inkl. Dark Mode |
+| `native.js` | Anbindung an die Android-App (lokale Erinnerungen, Sicherung, Teilen) |
+| `android/`, `capacitor.config.json` | Android-Projekt |
 | `shared.js` | Von App und Service Worker gemeinsam genutzt (IndexedDB, Erinnerungstext) |
 | `sw.js`, `manifest.webmanifest`, `icons/` | Offline-Unterstützung, Push-Empfang, Installation als App |
 | `supabase/` | Server für die täglichen Erinnerungen |
