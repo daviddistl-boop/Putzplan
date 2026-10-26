@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Kleines, einfarbiges Symbol für die Statusleiste (Eimer mit Stiel). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="512"
+    android:viewportHeight="512">
+    <path android:fillColor="#FFFFFFFF" android:pathData="M168,300h176l-20,120a24,24 0,0 1,-24 20H212a24,24 0,0 1,-24 -20z"/>
+    <path android:fillColor="#FFFFFFFF" android:pathData="M170,268h172a20,20 0,0 1,0 40H170a20,20 0,0 1,0 -40z"/>
+    <path android:fillColor="#FFFFFFFF" android:pathData="M256,92a14,14 0,0 1,14 14v152a14,14 0,0 1,-28 0V106a14,14 0,0 1,14 -14z"/>
+    <path android:fillColor="#FFFFFFFF" android:pathData="M392,196l8,18 18,8 -18,8 -8,18 -8,-18 -18,-8 18,-8z"/>
+</vector>

@@ -5,6 +5,7 @@
   const S = window.Scheduler;
   const T = window.Templates;
   const Shared = window.PutzplanShared;
+  const Native = window.PutzplanNative || { isNative: false };
   const STORAGE_KEY = 'putzplan.v1';
   const WEEKDAYS = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
   const WEEKDAYS_SHORT = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
@@ -43,11 +44,15 @@
       toast('Speichern fehlgeschlagen – ist der Speicher voll?');
     }
     syncToServiceWorker();
+    if (Native.isNative) {
+      Native.saveBackup(state);
+      Native.scheduleReminders(state, Shared, S);
+    }
   }
 
   // Kopie für den Service Worker, damit die Erinnerung die heutigen Aufgaben kennt.
   function syncToServiceWorker() {
-    if (!('indexedDB' in window)) return;
+    if (Native.isNative || !('indexedDB' in window)) return;
     Shared.kvSet('state', state).catch(() => {});
   }
 
@@ -694,7 +699,7 @@
   let installPrompt = null;
 
   function isStandalone() {
-    return window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+    return Native.isNative || window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
   }
 
   function reminder() {
@@ -728,7 +733,14 @@
   function reminderCard() {
     const r = reminder();
     let note = '';
-    if (!pushSupported) {
+    if (Native.isNative) {
+      if (ui.notifPermission === 'denied') {
+        note = '<p class="note">Benachrichtigungen sind für Putzplan ausgeschaltet. Erlaube sie unter Android-Einstellungen → Apps → Putzplan → Benachrichtigungen.</p>';
+      } else if (r.enabled && ui.exactAlarm === 'denied') {
+        note = `<p class="note">Damit die Erinnerung pünktlich kommt, erlaube Putzplan „Wecker und Erinnerungen“.
+          <button class="link" data-action="exact-alarm">Jetzt erlauben ›</button></p>`;
+      }
+    } else if (!pushSupported) {
       note = isIOS && !isStandalone()
         ? '<p class="note">Auf iPhone/iPad funktionieren Erinnerungen nur in der installierten App (iOS 16.4 oder neuer). Installiere Putzplan zuerst wie oben beschrieben.</p>'
         : '<p class="note">Dieser Browser unterstützt leider keine Push-Benachrichtigungen.</p>';
@@ -742,10 +754,10 @@
     }
     return `<section class="card">
         <h2>🔔 Tägliche Erinnerung</h2>
-        <p class="muted small">Jeden Tag zur gewählten Uhrzeit eine Benachrichtigung mit deinen Aufgaben für heute – auch wenn die App geschlossen ist.</p>
+        <p class="muted small">Jeden Tag zur gewählten Uhrzeit eine Benachrichtigung mit deinen Aufgaben für heute – auch wenn die App geschlossen ist.${Native.isNative ? ' Läuft komplett auf deinem Handy, ohne Internet.' : ''}</p>
         <label class="switch-row">
           <span>Erinnerung ${r.enabled ? 'an' : 'aus'}</span>
-          <input type="checkbox" class="switch" data-reminder-toggle ${r.enabled ? 'checked' : ''} ${pushSupported && !ui.reminderBusy ? '' : 'disabled'}>
+          <input type="checkbox" class="switch" data-reminder-toggle ${r.enabled ? 'checked' : ''} ${reminderSupported() && !ui.reminderBusy ? '' : 'disabled'}>
         </label>
         <label class="switch-row">
           <span>Uhrzeit</span>
@@ -755,6 +767,21 @@
         ${r.enabled ? '<button class="btn block" data-action="reminder-test">Test-Benachrichtigung senden</button>' : ''}
         ${preview ? `<p class="muted small">So sieht die Erinnerung heute aus:</p>${preview}` : ''}
       </section>`;
+  }
+
+  function reminderSupported() {
+    return Native.isNative || pushSupported;
+  }
+
+  // Status der Android-Berechtigungen für die Anzeige in den Einstellungen.
+  async function refreshNativeStatus() {
+    if (!Native.isNative) return;
+    try {
+      const before = ui.notifPermission + ui.exactAlarm;
+      ui.notifPermission = await Native.notificationPermission(false);
+      ui.exactAlarm = await Native.exactAlarmStatus();
+      if (before !== ui.notifPermission + ui.exactAlarm && ui.tab === 'settings') render();
+    } catch (e) { /* ignorieren */ }
   }
 
   async function pushApi(path, body) {
@@ -807,6 +834,19 @@
 
   function enableReminder() {
     return withBusy(async () => {
+      if (Native.isNative) {
+        const perm = await Native.notificationPermission(true);
+        ui.notifPermission = perm;
+        if (perm !== 'granted') {
+          toast('Ohne Erlaubnis für Benachrichtigungen geht es leider nicht.');
+          return;
+        }
+        reminder().enabled = true;
+        save();
+        ui.exactAlarm = await Native.exactAlarmStatus();
+        toast(`Erinnerung aktiv – täglich um ${reminder().time} Uhr 🔔`);
+        return;
+      }
       if (!pushSupported) throw new Error('nicht unterstützt');
       const perm = await Notification.requestPermission();
       if (perm !== 'granted') {
@@ -824,6 +864,10 @@
     return withBusy(async () => {
       reminder().enabled = false;
       save();
+      if (Native.isNative) {
+        toast('Erinnerung ausgeschaltet');
+        return;
+      }
       const sub = await pushSubscription(false);
       if (sub) {
         await pushApi('/unsubscribe', { endpoint: sub.endpoint }).catch(() => {});
@@ -858,10 +902,17 @@
   // ---------------------------------------------------------------- Import / Export
 
   function exportData() {
+    const filename = `putzplan-${new Date().toISOString().slice(0, 10)}.json`;
+    if (Native.isNative) {
+      Native.shareExport(filename, JSON.stringify(state, null, 2)).catch((e) => {
+        if (!/cancel/i.test(String(e && e.message))) toast('Export fehlgeschlagen');
+      });
+      return;
+    }
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `putzplan-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = filename;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
@@ -950,7 +1001,14 @@
         }
         break;
       case 'dismiss-install': state.settings.installHintDismissed = true; save(); render(); break;
+      case 'exact-alarm': Native.openExactAlarmSettings(); break;
       case 'reminder-test':
+        if (Native.isNative) {
+          Native.testNotification(state, Shared, S)
+            .then(() => toast('Test-Benachrichtigung kommt in 5 Sekunden 📬'))
+            .catch(() => toast('Test fehlgeschlagen'));
+          break;
+        }
         withBusy(async () => {
           const sub = await pushSubscription(false);
           if (!sub) throw new Error('Gerät nicht angemeldet');
@@ -999,7 +1057,9 @@
     if (t.dataset.reminderTime !== undefined && /^\d\d:\d\d$/.test(t.value)) {
       reminder().time = t.value;
       save();
-      if (reminder().enabled) {
+      if (reminder().enabled && Native.isNative) {
+        toast(`Erinnerung jetzt täglich um ${t.value} Uhr`);
+      } else if (reminder().enabled) {
         withBusy(async () => {
           await registerReminder();
           toast(`Erinnerung jetzt täglich um ${t.value} Uhr`);
@@ -1015,16 +1075,39 @@
   // Plan neu berechnen, wenn die App nach Mitternacht wieder geöffnet wird.
   let lastRenderDay = S.today();
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && S.today() !== lastRenderDay) {
+    if (document.hidden) return;
+    if (S.today() !== lastRenderDay) {
       lastRenderDay = S.today();
       render();
     }
+    if (Native.isNative) {
+      // Erinnerungen mit dem aktuellen Plan neu einplanen; Berechtigungen können sich geändert haben.
+      Native.scheduleReminders(state, Shared, S);
+      refreshNativeStatus();
+    }
   });
 
-  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
-    navigator.serviceWorker.register('sw.js').then(resyncReminder).catch(() => {});
+  async function start() {
+    if (Native.isNative) {
+      // Falls localStorage leer ist (z. B. nach dem Löschen des Browser-Speichers), aus der Sicherung wiederherstellen.
+      if (!state.onboarded) {
+        const backup = await Native.loadBackup();
+        if (backup && backup.onboarded) state = Object.assign(defaultState(), backup);
+      }
+      Native.onBackButton(() => {
+        if (document.querySelector('#modal-root .modal')) closeModal();
+        else if (ui.roomId) { ui.roomId = null; render(); }
+        else if (ui.tab !== 'today' && state.onboarded) { ui.tab = 'today'; render(); }
+        else Native.exitApp();
+      });
+      save();
+      refreshNativeStatus();
+    } else if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+      navigator.serviceWorker.register('sw.js').then(resyncReminder).catch(() => {});
+      syncToServiceWorker();
+    }
+    render();
   }
 
-  syncToServiceWorker();
-  render();
+  start();
 })();

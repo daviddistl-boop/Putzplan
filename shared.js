@@ -38,27 +38,36 @@
   const kvGet = (key) => kv('readonly', (s) => s.get(key));
   const kvSet = (key, value) => kv('readwrite', (s) => s.put(value, key));
 
-  /** Titel und Text der Erinnerung für den heutigen Tag. */
-  function reminderMessage(state, S) {
-    const day = S.today();
-    const done = (state.history || []).filter((h) => h.day === day && !h.skipped).map((h) => h.taskId);
-    const plan = S.planDays(state, day, 1, done)[0];
-    if (!plan.items.length) {
+  /** Titel und Text einer Erinnerung für einen Tag aus dem Plan. */
+  function messageForDay(state, dayPlan) {
+    if (!dayPlan.items.length) {
       return { title: 'Alles sauber ✨', body: 'Heute steht nichts auf deinem Putzplan.' };
     }
-    const minutes = plan.items.reduce((s, i) => s + i.task.minutes, 0);
+    const minutes = dayPlan.items.reduce((s, i) => s + i.task.minutes, 0);
     const rooms = new Map((state.rooms || []).map((r) => [r.id, r]));
-    const names = plan.items.slice(0, 4).map((i) => {
+    const names = dayPlan.items.slice(0, 4).map((i) => {
       const r = rooms.get(i.task.roomId);
       return `${r ? r.icon + ' ' : ''}${i.task.name}`;
     });
-    const more = plan.items.length - names.length;
-    const n = plan.items.length;
+    const more = dayPlan.items.length - names.length;
+    const n = dayPlan.items.length;
     return {
       title: `Heute: ${n} Aufgabe${n === 1 ? '' : 'n'} · ca. ${minutes} Min.`,
       body: names.join('\n') + (more > 0 ? `\n… und ${more} weitere` : ''),
     };
   }
 
-  root.PutzplanShared = { PUSH_API, kvGet, kvSet, reminderMessage };
+  /** Erinnerungen für die nächsten `count` Tage (ab heute), jeweils mit dem geplanten Inhalt. */
+  function reminderMessages(state, S, count) {
+    const day = S.today();
+    const done = (state.history || []).filter((h) => h.day === day && !h.skipped).map((h) => h.taskId);
+    return S.planDays(state, day, count, done).map((p) => Object.assign({ day: p.day }, messageForDay(state, p)));
+  }
+
+  /** Titel und Text der Erinnerung für den heutigen Tag. */
+  function reminderMessage(state, S) {
+    return reminderMessages(state, S, 1)[0];
+  }
+
+  root.PutzplanShared = { PUSH_API, kvGet, kvSet, reminderMessage, reminderMessages };
 })(typeof self !== 'undefined' ? self : globalThis);

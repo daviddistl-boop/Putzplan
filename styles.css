@@ -49,7 +49,7 @@ h2 { font-size: 1.05rem; margin: 1.4em 0 0.6em; }
 [hidden] { display: none !important; }
 
 .app { max-width: 640px; margin: 0 auto; min-height: 100vh; }
-.view { padding: 16px 16px calc(96px + env(safe-area-inset-bottom)); }
+.view { padding: max(16px, env(safe-area-inset-top)) 16px calc(96px + env(safe-area-inset-bottom)); }
 
 /* Navigation */
 .tabs {

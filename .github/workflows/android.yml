@@ -1,0 +1,97 @@
+name: Android-App bauen
+
+on:
+  push:
+    branches: [main, ccr-e78ad8cb-nzqwpn]
+    paths-ignore: ['**.md', 'supabase/**']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Abhängigkeiten installieren
+        run: npm ci
+
+      - name: Tests
+        run: npm test
+
+      - name: Web-App in das Android-Projekt übernehmen
+        run: npm run android:sync
+
+      - name: Signaturschlüssel aus den Secrets holen
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/putzplan.jks"
+            echo "PUTZPLAN_KEYSTORE=$RUNNER_TEMP/putzplan.jks" >> "$GITHUB_ENV"
+            echo "SIGNING_NOTE=" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Secret ANDROID_KEYSTORE_BASE64 fehlt – APK wird mit einem Debug-Schlüssel signiert."
+            echo "SIGNING_NOTE=⚠️ Testversion mit Debug-Signatur: Für spätere Updates ggf. vorher deinstallieren (Daten vorher exportieren)." >> "$GITHUB_ENV"
+          fi
+
+      - name: APK bauen
+        working-directory: android
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+          VERSION_NAME: 1.0.${{ github.run_number }}
+          PUTZPLAN_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: APK umbenennen
+        run: |
+          mkdir -p dist
+          cp android/app/build/outputs/apk/release/app-release.apk dist/Putzplan.apk
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Putzplan-1.0.${{ github.run_number }}
+          path: dist/Putzplan.apk
+
+      - name: Als GitHub-Release veröffentlichen
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Putzplan 1.0.${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          files: dist/Putzplan.apk
+          body: |
+            Android-App zum Installieren: **Putzplan.apk** herunterladen und auf dem Handy öffnen.
+            Updates lassen sich einfach drüberinstallieren – deine Daten bleiben erhalten.
+            ${{ env.SIGNING_NOTE }}
+
+      - name: APK zusätzlich auf den Branch "apk" legen
+        run: |
+          mkdir /tmp/apk && cp dist/Putzplan.apk /tmp/apk/
+          cd /tmp/apk
+          echo "Putzplan 1.0.${{ github.run_number }} (${{ github.sha }})" > VERSION.txt
+          git init -q -b apk
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add . && git commit -qm "Putzplan 1.0.${{ github.run_number }}"
+          git push -qf "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" apk

@@ -1,0 +1,14 @@
+{
+  "appId": "de.putzplan.app",
+  "appName": "Putzplan",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false
+  },
+  "plugins": {
+    "LocalNotifications": {
+      "smallIcon": "ic_stat_putzplan",
+      "iconColor": "#4F8CFF"
+    }
+  }
+}
