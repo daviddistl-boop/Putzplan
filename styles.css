@@ -277,3 +277,33 @@ h2 { font-size: 1.05rem; margin: 1.4em 0 0.6em; }
   background: var(--surface-2); border-radius: 14px; padding: 10px 12px; font-size: 0.85rem;
 }
 .notif-preview img { width: 36px; height: 36px; border-radius: 8px; }
+
+/* Putz-Timer */
+.timer-btn { margin-top: 14px; font-size: 1.05rem; padding: 14px 16px; }
+.session-head { text-align: center; display: grid; justify-items: center; gap: 4px; padding-top: 8px; }
+.session-head p { margin: 0; }
+.session-head .btn-row { width: 100%; max-width: 360px; }
+.timer-ring {
+  --p: 100;
+  width: 210px; height: 210px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: conic-gradient(var(--primary) calc(var(--p) * 1%), var(--surface-2) 0);
+  transition: background 0.3s;
+}
+.timer-ring.low { background: conic-gradient(var(--bad) calc(var(--p) * 1%), var(--surface-2) 0); }
+.timer-ring > div {
+  width: 180px; height: 180px; border-radius: 50%; background: var(--bg);
+  display: grid; place-content: center; text-align: center;
+}
+.timer-ring small { color: var(--muted); }
+.clock { font-size: 3rem; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -1px; }
+.session-banner { border-radius: var(--radius); padding: 14px 16px; margin: 14px 0 4px; }
+.session-banner p { margin: 4px 0 0; }
+.session-banner.good { background: color-mix(in srgb, var(--good) 16%, var(--surface)); }
+.session-banner.warn { background: color-mix(in srgb, var(--warn) 22%, var(--surface)); }
+.session-list { margin-top: 14px; }
+.session-list .row { cursor: pointer; }
+.check { display: inline-grid; place-items: center; color: #fff; font-weight: 700; }
+.check.checked { background: var(--good); border-color: var(--good); }
+.badge.good { background: color-mix(in srgb, var(--good) 18%, transparent); color: var(--good); }
+.learned { margin: -4px 0 0; color: var(--muted); }

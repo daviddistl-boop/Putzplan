@@ -52,6 +52,46 @@
     return !task.paused && !(task.snoozedUntil && task.snoozedUntil > day);
   }
 
+  // Gelernte Dauern: so viele Messungen werden höchstens berücksichtigt.
+  const MAX_SAMPLES = 5;
+
+  /** Geschätzte Dauer in Minuten – gelernt aus dem Timer, sonst die eingestellte Dauer. */
+  function estimate(task) {
+    return task.learnedMinutes || task.minutes;
+  }
+
+  /**
+   * Merkt sich eine gemessene Dauer und aktualisiert die Schätzung. Ausreißer
+   * (mehr als das Vierfache bzw. weniger als ein Viertel der Schätzung) werden
+   * ignoriert, z. B. wenn mehrere Aufgaben auf einmal abgehakt wurden.
+   * Gibt true zurück, wenn die Messung verwendet wurde.
+   */
+  function recordDuration(task, actualMinutes) {
+    const est = estimate(task);
+    if (!(actualMinutes > 0) || actualMinutes > est * 4 || actualMinutes < est / 4) return false;
+    const samples = (task.durations || []).concat(Math.round(actualMinutes * 10) / 10).slice(-MAX_SAMPLES);
+    task.durations = samples;
+    const avg = samples.reduce((a, b) => a + b, 0) / samples.length;
+    // Bei nur einer Messung noch die eigene Angabe mit einbeziehen.
+    const value = samples.length === 1 ? (avg + task.minutes) / 2 : avg;
+    task.learnedMinutes = Math.max(1, Math.round(value));
+    return true;
+  }
+
+  /**
+   * Zusatzaufgaben, wenn man schneller fertig ist: die dringendsten aktiven
+   * Aufgaben, die noch in die Restzeit passen und schon etwas schmutzig sind.
+   */
+  function bonusCandidates(state, day, excludeIds, maxMinutes) {
+    const exclude = new Set(excludeIds || []);
+    return (state.tasks || [])
+      .filter((t) => isActive(t, day) && !exclude.has(t.id) && estimate(t) <= maxMinutes)
+      .map((t) => ({ task: t, u: urgency(t, day) }))
+      .filter((e) => e.u >= 0.5)
+      .sort((a, b) => b.u - a.u)
+      .map((e) => e.task);
+  }
+
   function budgetFor(settings, day) {
     const budgets = settings.minutesPerWeekday || [];
     const b = budgets[weekday(day)];
@@ -98,7 +138,7 @@
       const items = [];
 
       if (i === 0) {
-        for (const t of tasks) if (done.has(t.id)) budget -= t.minutes;
+        for (const t of tasks) if (done.has(t.id)) budget -= estimate(t);
       }
 
       const eligible = tasks.filter((t) => isActive(t, day) && !(i === 0 && done.has(t.id)));
@@ -110,11 +150,11 @@
       const take = (entry) => {
         const memberId = pickMember(entry.task, members, dayLoad, weekLoad, day);
         if (memberId) {
-          dayLoad[memberId] = (dayLoad[memberId] || 0) + entry.task.minutes;
-          weekLoad[memberId] = (weekLoad[memberId] || 0) + entry.task.minutes;
+          dayLoad[memberId] = (dayLoad[memberId] || 0) + estimate(entry.task);
+          weekLoad[memberId] = (weekLoad[memberId] || 0) + estimate(entry.task);
         }
         items.push({ task: entry.task, urgency: entry.u, memberId, early: entry.u < 1 });
-        used += entry.task.minutes;
+        used += estimate(entry.task);
         sim.set(entry.task.id, day);
       };
 
@@ -123,13 +163,13 @@
         if (e.u < 1) break;
         // Tägliche Aufgaben passen immer rein – sie wären sonst sofort wieder fällig.
         if (budget <= 0) break;
-        if (used + e.task.minutes <= budget || e.task.interval <= 1 || used === 0) take(e);
+        if (used + estimate(e.task) <= budget || e.task.interval <= 1 || used === 0) take(e);
       }
       // 2. Freie Zeit mit bald fälligen Aufgaben füllen.
       for (const e of scored) {
         if (e.u >= 1 || e.u < PREFILL_THRESHOLD) continue;
         if (e.task.interval < 3) continue; // Kurze Intervalle lohnen sich nicht vorzuziehen.
-        if (used + e.task.minutes <= budget) take(e);
+        if (used + estimate(e.task) <= budget) take(e);
       }
 
       plan.push({ day, budget: Math.max(0, budget), minutes: used, items });
@@ -154,6 +194,9 @@
     dueDay,
     isActive,
     budgetFor,
+    estimate,
+    recordDuration,
+    bonusCandidates,
     planDays,
     roomCleanliness,
   };

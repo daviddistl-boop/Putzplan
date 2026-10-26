@@ -39,11 +39,11 @@
   const kvSet = (key, value) => kv('readwrite', (s) => s.put(value, key));
 
   /** Titel und Text einer Erinnerung für einen Tag aus dem Plan. */
-  function messageForDay(state, dayPlan) {
+  function messageForDay(state, dayPlan, S) {
     if (!dayPlan.items.length) {
       return { title: 'Alles sauber ✨', body: 'Heute steht nichts auf deinem Putzplan.' };
     }
-    const minutes = dayPlan.items.reduce((s, i) => s + i.task.minutes, 0);
+    const minutes = dayPlan.items.reduce((s, i) => s + S.estimate(i.task), 0);
     const rooms = new Map((state.rooms || []).map((r) => [r.id, r]));
     const names = dayPlan.items.slice(0, 4).map((i) => {
       const r = rooms.get(i.task.roomId);
@@ -61,7 +61,7 @@
   function reminderMessages(state, S, count) {
     const day = S.today();
     const done = (state.history || []).filter((h) => h.day === day && !h.skipped).map((h) => h.taskId);
-    return S.planDays(state, day, count, done).map((p) => Object.assign({ day: p.day }, messageForDay(state, p)));
+    return S.planDays(state, day, count, done).map((p) => Object.assign({ day: p.day }, messageForDay(state, p, S)));
   }
 
   /** Titel und Text der Erinnerung für den heutigen Tag. */

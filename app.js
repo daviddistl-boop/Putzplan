@@ -109,6 +109,11 @@
     return `Fällig in ${diff} Tagen`;
   }
 
+  // Dauer einer Aufgabe; ⏱ zeigt an, dass sie mit dem Timer gelernt wurde.
+  function minutesLabel(t) {
+    return t.learnedMinutes ? `⏱ ca. ${fmtMinutes(t.learnedMinutes)}` : fmtMinutes(t.minutes);
+  }
+
   function cleanlinessColor(pct) {
     if (pct >= 70) return 'var(--good)';
     if (pct >= 40) return 'var(--warn)';
@@ -140,17 +145,27 @@
 
   // ---------------------------------------------------------------- Aktionen
 
-  function completeTask(taskId, memberId) {
+  function completeTask(taskId, memberId, opts) {
     const t = task(taskId);
     if (!t) return;
+    const o = opts || {};
     const day = S.today();
     const entry = {
       id: uid(), taskId, day, memberId: memberId || (state.members[0] && state.members[0].id) || null,
-      minutes: t.minutes, prevLastDone: t.lastDone, prevSnoozed: t.snoozedUntil || null,
+      minutes: S.estimate(t), prevLastDone: t.lastDone, prevSnoozed: t.snoozedUntil || null,
     };
+    if (o.actualMs !== undefined) {
+      // Mit dem Timer gemessen: Dauer merken und daraus lernen.
+      entry.session = true;
+      entry.actualMinutes = Math.round((o.actualMs / MIN) * 10) / 10;
+      entry.prevLearned = t.learnedMinutes || null;
+      entry.prevDurations = t.durations ? t.durations.slice() : null;
+      S.recordDuration(t, o.actualMs / MIN);
+    }
     state.history.push(entry);
     t.lastDone = day;
     t.snoozedUntil = null;
+    if (o.silent) return;
     save();
     render();
     toast(`„${t.name}“ erledigt 🎉`, { label: 'Rückgängig', run: () => undoEntry(entry.id) });
@@ -175,7 +190,7 @@
     toast(`„${t.name}“ auf ${dayLabel(t.snoozedUntil)} verschoben`);
   }
 
-  function undoEntry(entryId) {
+  function undoEntry(entryId, silent) {
     const idx = state.history.findIndex((h) => h.id === entryId);
     if (idx < 0) return;
     const h = state.history[idx];
@@ -183,11 +198,356 @@
     if (t) {
       t.lastDone = h.prevLastDone;
       t.snoozedUntil = h.prevSnoozed;
+      if (h.session) {
+        t.learnedMinutes = h.prevLearned || undefined;
+        t.durations = h.prevDurations || undefined;
+      }
     }
     state.history.splice(idx, 1);
+    const s = state.session;
+    if (s && s.doneIds.includes(h.taskId) && h.day === S.today()) {
+      s.doneIds = s.doneIds.filter((id) => id !== h.taskId);
+      s.allDone = false;
+    }
+    if (silent) return;
     save();
     render();
   }
+  // ---------------------------------------------------------------- Putz-Timer
+  //
+  // Man startet den Timer mit seiner Zeit für heute und hakt währenddessen ab.
+  // Die Zeit zwischen zwei Häkchen wird als Dauer der Aufgabe gemessen – daraus
+  // lernt die App, wie lange man wirklich braucht. Ist man schneller, kommt eine
+  // Bonus-Aufgabe dazu; was am Ende offen ist, wird auf morgen verschoben.
+
+  const MIN = 60000;
+  let sessionTimer = null;
+  let wakeLock = null;
+
+  function sessionElapsed(s) {
+    return Math.max(0, (s.pausedAt || Date.now()) - s.startedAt - s.pausedMs);
+  }
+
+  function sessionRemaining(s) {
+    return s.durationMs - sessionElapsed(s);
+  }
+
+  function fmtClock(ms) {
+    const neg = ms < 0;
+    const total = Math.round(Math.abs(ms) / 1000);
+    const m = Math.floor(total / 60);
+    const sec = String(total % 60).padStart(2, '0');
+    return `${neg ? '+' : ''}${m}:${sec}`;
+  }
+
+  function sessionOpenIds(s) {
+    const done = new Set(s.doneIds);
+    return s.taskIds.filter((id) => !done.has(id) && task(id));
+  }
+
+  /** Restzeit des heutigen Budgets – Vorschlag für die Timer-Dauer. */
+  function remainingBudgetToday() {
+    const today = S.today();
+    const doneMin = state.history.filter((h) => h.day === today && !h.skipped).reduce((sum, h) => sum + h.minutes, 0);
+    return Math.max(0, S.budgetFor(state.settings, today) - doneMin);
+  }
+
+  function startSessionDialog() {
+    const today = S.today();
+    const plan = S.planDays(state, today, 1, doneTodayIds())[0];
+    const planMin = plan.items.reduce((sum, i) => sum + S.estimate(i.task), 0);
+    const suggested = Math.max(5, Math.round((remainingBudgetToday() || planMin || 15) / 5) * 5);
+    const options = [...new Set([10, 15, 20, 30, 45, 60, suggested])].sort((a, b) => a - b);
+    let chosen = suggested;
+    openModal(`
+      <h2>⏱️ Putz-Timer</h2>
+      <p class="muted">Wie lange möchtest du jetzt putzen? Hake ab, was du schaffst. Bist du schneller, kommt noch etwas dazu –
+        was übrig bleibt, wandert auf morgen.</p>
+      <p class="small">${plan.items.length
+        ? `Geplant: <strong>${plan.items.length} Aufgabe${plan.items.length === 1 ? '' : 'n'}</strong> · geschätzt ${fmtMinutes(planMin)}`
+        : 'Heute ist nichts mehr fällig – der Timer sucht dir passende Aufgaben, die bald dran sind.'}</p>
+      <div class="chip-grid">${options.map((m) => `<button class="chip ${m === chosen ? 'on' : ''}" data-min="${m}">${m} Min.</button>`).join('')}</div>
+      <div class="btn-row">
+        <button class="btn" data-cancel>Abbrechen</button>
+        <button class="btn primary" data-go>▶ Los geht's</button>
+      </div>`, (el) => {
+      el.querySelectorAll('[data-min]').forEach((b) => {
+        b.onclick = () => {
+          chosen = +b.dataset.min;
+          el.querySelectorAll('[data-min]').forEach((x) => x.classList.toggle('on', x === b));
+        };
+      });
+      el.querySelector('[data-cancel]').onclick = closeModal;
+      el.querySelector('[data-go]').onclick = () => { closeModal(); startSession(chosen); };
+    });
+  }
+
+  function startSession(minutes) {
+    const today = S.today();
+    const plan = S.planDays(state, today, 1, doneTodayIds())[0];
+    state.session = {
+      day: today,
+      startedAt: Date.now(),
+      durationMs: minutes * MIN,
+      pausedAt: null,
+      pausedMs: 0,
+      lastMark: 0,
+      taskIds: plan.items.map((i) => i.task.id),
+      bonusIds: [],
+      doneIds: [],
+      times: {},
+      memberIds: Object.fromEntries(plan.items.map((i) => [i.task.id, i.memberId])),
+      timeUp: false,
+      allDone: false,
+    };
+    ui.tab = 'today';
+    if (!state.session.taskIds.length) addBonusTask(true);
+    save();
+    syncTimerAlarm();
+    requestWakeLock();
+    render();
+  }
+
+  /** Nimmt die nächste passende Aufgabe dazu. Gibt false zurück, wenn keine mehr passt. */
+  function addBonusTask(silent) {
+    const s = state.session;
+    const remainingMin = sessionRemaining(s) / MIN;
+    if (remainingMin < 2) return false;
+    const next = S.bonusCandidates(state, S.today(), s.taskIds.concat(doneTodayIds()), remainingMin + 1)[0];
+    if (!next) return false;
+    s.taskIds.push(next.id);
+    s.bonusIds.push(next.id);
+    s.allDone = false;
+    if (!silent) toast(`Du bist schneller! ✨ Dazu kommt: ${next.name}`);
+    return true;
+  }
+
+  function sessionToggle(taskId) {
+    const s = state.session;
+    if (!s) return;
+    if (s.doneIds.includes(taskId)) {
+      // Häkchen zurücknehmen: Erledigt-Eintrag und gelernte Dauer zurücksetzen.
+      const entry = state.history.slice().reverse().find((h) => h.taskId === taskId && h.day === S.today() && h.session);
+      if (entry) undoEntry(entry.id, true);
+      s.doneIds = s.doneIds.filter((id) => id !== taskId);
+      delete s.times[taskId];
+      s.allDone = false;
+      save();
+      render();
+      return;
+    }
+    const elapsed = sessionElapsed(s);
+    const tookMs = elapsed - s.lastMark;
+    s.lastMark = elapsed;
+    s.times[taskId] = tookMs;
+    s.doneIds.push(taskId);
+    completeTask(taskId, s.memberIds[taskId] || task(taskId).assignee, { silent: true, actualMs: tookMs });
+    if (!sessionOpenIds(s).length && !s.timeUp) {
+      if (!addBonusTask(false)) s.allDone = true;
+    }
+    save();
+    render();
+  }
+
+  function togglePause() {
+    const s = state.session;
+    if (s.pausedAt) {
+      s.pausedMs += Date.now() - s.pausedAt;
+      s.pausedAt = null;
+      requestWakeLock();
+    } else {
+      s.pausedAt = Date.now();
+    }
+    save();
+    syncTimerAlarm();
+    render();
+  }
+
+  function extendSession(minutes) {
+    const s = state.session;
+    s.durationMs = sessionElapsed(s) + Math.max(0, sessionRemaining(s)) + minutes * MIN;
+    s.timeUp = false;
+    save();
+    syncTimerAlarm();
+    render();
+  }
+
+  /** Beendet den Timer. `moveOpen`: offene geplante Aufgaben auf morgen verschieben. */
+  function endSession(moveOpen) {
+    const s = state.session;
+    if (!s) return;
+    const open = sessionOpenIds(s);
+    const bonus = new Set(s.bonusIds);
+    let moved = 0;
+    if (moveOpen) {
+      for (const id of open) {
+        if (bonus.has(id)) continue; // Bonus-Aufgaben waren noch gar nicht fällig.
+        task(id).snoozedUntil = S.today() + 1;
+        moved++;
+      }
+    }
+    const minutes = Math.round(sessionElapsed(s) / MIN);
+    state.session = null;
+    save();
+    syncTimerAlarm();
+    releaseWakeLock();
+    render();
+    const parts = [`${s.doneIds.length} erledigt in ${fmtMinutes(Math.max(1, minutes))}`];
+    if (moved) parts.push(`${moved} auf morgen verschoben`);
+    toast(`${s.doneIds.length ? '💪 ' : ''}${parts.join(' · ')}`);
+  }
+
+  function confirmEndSession() {
+    const s = state.session;
+    const open = sessionOpenIds(s).filter((id) => !s.bonusIds.includes(id));
+    if (!open.length) { endSession(false); return; }
+    openModal(`
+      <h2>Timer beenden?</h2>
+      <p class="muted">${open.length} Aufgabe${open.length === 1 ? ' ist' : 'n sind'} noch offen.</p>
+      <div class="menu">
+        <button data-m="move">➡️ Offene auf morgen verschieben</button>
+        <button data-m="keep">📋 Für heute auf der Liste lassen</button>
+        <button data-m="cancel" class="muted">Weiter putzen</button>
+      </div>`, (el) => {
+      el.querySelectorAll('[data-m]').forEach((b) => {
+        b.onclick = () => {
+          closeModal();
+          if (b.dataset.m === 'move') endSession(true);
+          if (b.dataset.m === 'keep') endSession(false);
+        };
+      });
+    });
+  }
+
+  // Auf Android eine Benachrichtigung zum Ablauf der Zeit einplanen.
+  function syncTimerAlarm() {
+    if (!Native.isNative || !Native.scheduleTimerEnd) return;
+    const s = state.session;
+    if (s && !s.pausedAt && !s.timeUp && sessionRemaining(s) > 1000) {
+      Native.scheduleTimerEnd(new Date(Date.now() + sessionRemaining(s)), sessionOpenIds(s).length);
+    } else {
+      Native.cancelTimerEnd();
+    }
+  }
+
+  async function requestWakeLock() {
+    try {
+      if ('wakeLock' in navigator && !wakeLock) {
+        wakeLock = await navigator.wakeLock.request('screen');
+        wakeLock.addEventListener('release', () => { wakeLock = null; });
+      }
+    } catch (e) { /* nicht unterstützt oder nicht erlaubt */ }
+  }
+
+  function releaseWakeLock() {
+    if (wakeLock) wakeLock.release().catch(() => {});
+    wakeLock = null;
+  }
+
+  function tickSession() {
+    const s = state.session;
+    if (!s || ui.tab !== 'today') return;
+    const remaining = sessionRemaining(s);
+    if (remaining <= 0 && !s.timeUp && !s.allDone) {
+      s.timeUp = true;
+      save();
+      syncTimerAlarm();
+      if (navigator.vibrate) navigator.vibrate([300, 150, 300]);
+      render();
+      return;
+    }
+    const clock = document.getElementById('session-clock');
+    if (!clock || s.timeUp) return;
+    clock.textContent = fmtClock(remaining);
+    const ring = document.getElementById('session-ring');
+    const pct = Math.max(0, Math.min(100, (remaining / s.durationMs) * 100));
+    ring.style.setProperty('--p', pct.toFixed(2));
+    ring.classList.toggle('low', remaining < 2 * MIN);
+    const pace = document.getElementById('session-pace');
+    if (pace) pace.innerHTML = paceText(s);
+  }
+
+  function paceText(s) {
+    const open = sessionOpenIds(s);
+    if (!open.length) return '';
+    const need = open.reduce((sum, id) => sum + S.estimate(task(id)), 0) * MIN;
+    const remaining = sessionRemaining(s);
+    if (remaining <= 0) return '';
+    if (need <= remaining * 0.8) return '🟢 Gut in der Zeit';
+    if (need <= remaining * 1.1) return '🟡 Knapp – dranbleiben!';
+    return '🔴 Wird eng – nicht alles schaffst du heute';
+  }
+
+  function viewSession() {
+    const s = state.session;
+    const remaining = sessionRemaining(s);
+    const pct = Math.max(0, Math.min(100, (remaining / s.durationMs) * 100));
+    const open = sessionOpenIds(s);
+    const doneSet = new Set(s.doneIds);
+    const bonus = new Set(s.bonusIds);
+    const ids = s.taskIds.filter((id) => task(id));
+    // Offene zuerst, Erledigte unten.
+    ids.sort((a, b) => (doneSet.has(a) ? 1 : 0) - (doneSet.has(b) ? 1 : 0));
+
+    let banner = '';
+    if (s.timeUp) {
+      const moveCount = open.filter((id) => !bonus.has(id)).length;
+      banner = `<div class="session-banner ${moveCount ? 'warn' : 'good'}">
+          <strong>⏰ Zeit um!</strong>
+          <p>${s.doneIds.length} geschafft${moveCount ? ` · ${moveCount} wandert auf morgen` : ''}.</p>
+          <div class="btn-row">
+            <button class="btn" data-action="session-extend">+5 Min. weiter</button>
+            <button class="btn primary" data-action="session-finish">${moveCount ? 'Beenden & verschieben' : 'Beenden'}</button>
+          </div></div>`;
+    } else if (s.allDone) {
+      banner = `<div class="session-banner good">
+          <strong>🎉 Alles geschafft!</strong>
+          <p>Für die restliche Zeit passt nichts mehr – genieß die Pause.</p>
+          <button class="btn primary block" data-action="session-finish">Fertig</button></div>`;
+    }
+
+    return `
+      <header class="session-head">
+        <div id="session-ring" class="timer-ring ${remaining < 2 * MIN ? 'low' : ''}" style="--p:${pct.toFixed(2)}">
+          <div><span id="session-clock" class="clock">${s.timeUp ? '0:00' : fmtClock(remaining)}</span>
+          <small>${s.timeUp ? 'Zeit um' : s.pausedAt ? 'Pausiert' : 'verbleibend'}</small></div>
+        </div>
+        <p class="muted">${s.doneIds.length} erledigt · ${open.length} offen</p>
+        <p id="session-pace" class="small">${s.timeUp || s.allDone ? '' : paceText(s)}</p>
+        ${s.timeUp || s.allDone ? '' : `<div class="btn-row">
+          <button class="btn" data-action="session-pause">${s.pausedAt ? '▶ Weiter' : '⏸ Pause'}</button>
+          <button class="btn" data-action="session-end">■ Beenden</button>
+        </div>`}
+      </header>
+      ${banner}
+      <ul class="list session-list">${ids.map((id) => {
+        const t = task(id);
+        const r = room(t.roomId);
+        const isDone = doneSet.has(id);
+        const willMove = s.timeUp && !isDone && !bonus.has(id);
+        return `<li class="row ${isDone ? 'done' : ''}" data-action="session-toggle" data-id="${id}">
+          <span class="check ${isDone ? 'checked' : ''}" aria-hidden="true">${isDone ? '✓' : ''}</span>
+          <span class="room-icon">${r ? r.icon : '🧽'}</span>
+          <div class="row-main">
+            <div class="row-title">${esc(t.name)}</div>
+            <div class="row-sub">${r ? esc(r.name) : ''} ·
+              ${isDone ? `in ${fmtClock(s.times[id] || 0)} Min.` : `ca. ${fmtMinutes(S.estimate(t))}`}
+              ${bonus.has(id) ? '<span class="badge good">Bonus ✨</span>' : ''}
+              ${willMove ? '<span class="badge">→ morgen</span>' : ''}</div>
+          </div>
+          ${avatar(member(s.memberIds[id]))}
+        </li>`;
+      }).join('')}</ul>
+      ${!s.timeUp && !s.allDone && sessionRemaining(s) > 2 * MIN ? '<button class="link" data-action="session-more">＋ Noch eine Aufgabe dazunehmen</button>' : ''}
+      <p class="muted small center">Tipp: Hake jede Aufgabe direkt ab, wenn du fertig bist – so lernt die App, wie lange du wirklich brauchst.</p>`;
+  }
+
+  function ensureSessionTimer() {
+    const active = state.session && ui.tab === 'today' && !state.session.pausedAt;
+    if (active && !sessionTimer) sessionTimer = setInterval(tickSession, 1000);
+    if (!active && sessionTimer) { clearInterval(sessionTimer); sessionTimer = null; }
+  }
+
 
   function addRoomFromTemplate(tpl, stagger) {
     const r = { id: uid(), name: tpl.name, icon: tpl.icon };
@@ -217,7 +577,7 @@
       .sort((a, b) => S.urgency(b, today) - S.urgency(a, today));
 
     const doneMin = doneEntries.reduce((s, h) => s + h.minutes, 0);
-    const openMin = plan.items.reduce((s, i) => s + i.task.minutes, 0);
+    const openMin = plan.items.reduce((s, i) => s + S.estimate(i.task), 0);
     const total = doneMin + openMin;
     const pct = total ? Math.round((doneMin / total) * 100) : 100;
     const d = new Date();
@@ -233,6 +593,10 @@
         </div>
         <div class="ring" style="--p:${pct}"><span>${pct}%</span></div>
       </header>`;
+
+    if (state.tasks.length) {
+      html += `<button class="btn primary block timer-btn" data-action="session-start">⏱️ Putz-Timer starten</button>`;
+    }
 
     if (!isStandalone() && !state.settings.installHintDismissed) {
       html += `<div class="hint"><span>📲</span><div class="grow"><strong>Putzplan als App installieren</strong><br>
@@ -281,7 +645,7 @@
       <span class="room-icon">${r ? r.icon : '🧽'}</span>
       <div class="row-main" data-action="task-menu" data-id="${t.id}" data-member="${memberId || ''}">
         <div class="row-title">${esc(t.name)}</div>
-        <div class="row-sub">${r ? esc(r.name) : ''} · ${fmtMinutes(t.minutes)}
+        <div class="row-sub">${r ? esc(r.name) : ''} · ${minutesLabel(t)}
           ${overdue ? `<span class="badge bad">${dueText(t)}</span>` : ''}
           ${tag ? `<span class="badge">${tag}</span>` : ''}</div>
         <div class="dirt"><span style="width:${Math.min(100, u * 100)}%;background:${dirtColor(u)}"></span></div>
@@ -306,7 +670,7 @@
           ${d.budget ? `<div class="bar"><span style="width:${Math.min(100, (d.minutes / Math.max(1, d.budget)) * 100)}%"></span></div>` : ''}
           ${d.items.length ? `<ul class="mini-list">${d.items.map((i) => {
             const r = room(i.task.roomId);
-            return `<li data-action="edit-task" data-id="${i.task.id}"><span>${r ? r.icon : '🧽'}</span><span class="grow">${esc(i.task.name)}<small class="muted"> · ${r ? esc(r.name) : ''}</small></span>${avatar(member(i.memberId))}<small class="muted">${i.task.minutes}′</small></li>`;
+            return `<li data-action="edit-task" data-id="${i.task.id}"><span>${r ? r.icon : '🧽'}</span><span class="grow">${esc(i.task.name)}<small class="muted"> · ${r ? esc(r.name) : ''}</small></span>${avatar(member(i.memberId))}<small class="muted">${S.estimate(i.task)}′</small></li>`;
           }).join('')}</ul>` : `<p class="muted small">${d.budget ? 'Nichts geplant 🙌' : 'Heute wird nicht geputzt 😌'}</p>`}
         </section>`).join('')}`;
   }
@@ -356,7 +720,7 @@
           <button class="check" data-action="complete" data-id="${t.id}" data-member="${t.assignee || ''}" title="Jetzt erledigt"></button>
           <div class="row-main" data-action="edit-task" data-id="${t.id}">
             <div class="row-title">${esc(t.name)}</div>
-            <div class="row-sub">${intervalLabel(t.interval)} · ${fmtMinutes(t.minutes)} · <span class="${overdue ? 'bad-text' : ''}">${dueText(t)}</span></div>
+            <div class="row-sub">${intervalLabel(t.interval)} · ${minutesLabel(t)} · <span class="${overdue ? 'bad-text' : ''}">${dueText(t)}</span></div>
             <div class="dirt"><span style="width:${Math.min(100, u * 100)}%;background:${dirtColor(u)}"></span></div>
           </div>
           ${avatar(member(t.assignee))}
@@ -547,6 +911,8 @@
           <option value="custom" ${presetMatch ? '' : 'selected'}>Eigenes Intervall…</option></select></label>
         <label class="custom-interval" ${presetMatch ? 'hidden' : ''}>Alle … Tage<input class="input" type="number" min="1" max="730" name="interval" value="${t.interval}"></label>
         <label>Dauer (Minuten)<input class="input" type="number" min="1" max="480" name="minutes" value="${t.minutes}"></label>
+        ${t.learnedMinutes ? `<p class="small learned">⏱ Gelernt aus ${t.durations.length} Messung${t.durations.length === 1 ? '' : 'en'}: du brauchst ca. <strong>${fmtMinutes(t.learnedMinutes)}</strong>.
+          Der Plan rechnet damit. Änderst du die Dauer oben, wird neu gelernt.</p>` : ''}
         ${state.members.length ? `<label>Zuständig<select class="input" name="assignee">${memberOptions(t.assignee, 'Automatisch verteilen')}</select></label>` : ''}
         ${taskId ? `<label class="check-label"><input type="checkbox" name="paused" ${t.paused ? 'checked' : ''}> Pausieren (z. B. im Urlaub)</label>` : `
           <label>Zuletzt erledigt<select class="input" name="last">
@@ -580,6 +946,7 @@
         };
         if (!data.name) return;
         if (taskId) {
+          if (data.minutes !== t.minutes) { delete t.learnedMinutes; delete t.durations; }
           Object.assign(t, data, { paused: form.paused.checked });
         } else {
           const today = S.today();
@@ -948,7 +1315,9 @@
     tabs.hidden = false;
     tabs.querySelectorAll('[data-tab]').forEach((b) => b.classList.toggle('active', b.dataset.tab === ui.tab));
     const views = { today: viewToday, week: viewWeek, rooms: viewRooms, team: viewTeam, settings: viewSettings };
+    if (state.session && ui.tab === 'today') views.today = viewSession;
     view.innerHTML = views[ui.tab]();
+    ensureSessionTimer();
   }
 
   function finishOnboarding() {
@@ -1001,6 +1370,16 @@
         }
         break;
       case 'dismiss-install': state.settings.installHintDismissed = true; save(); render(); break;
+      case 'session-start': startSessionDialog(); break;
+      case 'session-toggle': sessionToggle(id); break;
+      case 'session-pause': togglePause(); break;
+      case 'session-end': confirmEndSession(); break;
+      case 'session-extend': extendSession(5); break;
+      case 'session-finish': endSession(true); break;
+      case 'session-more':
+        if (!addBonusTask(false)) toast('Gerade passt keine weitere Aufgabe in die Restzeit.');
+        save(); render();
+        break;
       case 'exact-alarm': Native.openExactAlarmSettings(); break;
       case 'reminder-test':
         if (Native.isNative) {
@@ -1088,6 +1467,8 @@
   });
 
   async function start() {
+    // Ein Timer von gestern ist abgelaufen – offene Aufgaben sind heute ohnehin wieder fällig.
+    if (state.session && state.session.day !== S.today()) state.session = null;
     if (Native.isNative) {
       // Falls localStorage leer ist (z. B. nach dem Löschen des Browser-Speichers), aus der Sicherung wiederherstellen.
       if (!state.onboarded) {

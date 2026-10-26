@@ -21,6 +21,7 @@
   // der App wird neu geplant, damit Inhalt und Zeitraum aktuell bleiben.
   const DAYS_AHEAD = 30;
   const TEST_ID = 999;
+  const TIMER_ID = 998;
 
   // ------------------------------------------------------------ Datensicherung
 
@@ -138,6 +139,35 @@
     });
   }
 
+  // ------------------------------------------------------------ Putz-Timer
+
+  /** Benachrichtigung, wenn die Timer-Zeit abgelaufen ist (auch bei gesperrtem Bildschirm). */
+  async function scheduleTimerEnd(at, openCount) {
+    if (!isNative) return;
+    try {
+      await cancelTimerEnd();
+      if ((await notificationPermission(false)) !== 'granted') return;
+      await ensureChannel();
+      await P.LocalNotifications.schedule({
+        notifications: [{
+          id: TIMER_ID,
+          title: '⏰ Putz-Zeit ist um!',
+          body: openCount ? 'Hake ab, was du geschafft hast – der Rest wandert auf morgen.' : 'Super gemacht! 🎉',
+          channelId: CHANNEL,
+          schedule: { at, allowWhileIdle: true },
+          isExactNotification: (await exactAlarmStatus()) !== 'denied',
+        }],
+      });
+    } catch (e) {
+      console.warn('Timer-Benachrichtigung fehlgeschlagen', e);
+    }
+  }
+
+  function cancelTimerEnd() {
+    if (!isNative) return Promise.resolve();
+    return P.LocalNotifications.cancel({ notifications: [{ id: TIMER_ID }] }).catch(() => {});
+  }
+
   // ------------------------------------------------------------ Export & Zurück-Taste
 
   async function shareExport(filename, json) {
@@ -162,6 +192,8 @@
     openExactAlarmSettings,
     scheduleReminders,
     testNotification,
+    scheduleTimerEnd,
+    cancelTimerEnd,
     shareExport,
     onBackButton,
     exitApp,

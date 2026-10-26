@@ -103,3 +103,40 @@ test('roomCleanliness', () => {
   assert.strictEqual(S.roomCleanliness(tasks, MONDAY), 50);
   assert.strictEqual(S.roomCleanliness([], MONDAY), 100);
 });
+
+test('estimate nutzt gelernte Dauer, sonst die eingestellte', () => {
+  assert.strictEqual(S.estimate(mkTask('a', 7, 10, MONDAY)), 10);
+  assert.strictEqual(S.estimate(mkTask('a', 7, 10, MONDAY, { learnedMinutes: 6 })), 6);
+});
+
+test('recordDuration lernt aus Messungen und ignoriert Ausreißer', () => {
+  const t = mkTask('a', 7, 10, MONDAY);
+  assert.strictEqual(S.recordDuration(t, 6), true);
+  assert.strictEqual(t.learnedMinutes, 8); // erste Messung: Mittel aus Angabe (10) und Messung (6)
+  S.recordDuration(t, 6);
+  assert.strictEqual(t.learnedMinutes, 6);
+  assert.strictEqual(S.recordDuration(t, 0.5), false); // viel zu schnell (z. B. mehrfach abgehakt)
+  assert.strictEqual(S.recordDuration(t, 60), false); // viel zu lang (Timer vergessen)
+  for (let i = 0; i < 6; i++) S.recordDuration(t, 5);
+  assert.strictEqual(t.durations.length, 5);
+  assert.strictEqual(t.learnedMinutes, 5);
+});
+
+test('Plan rechnet mit gelernten Dauern', () => {
+  // Budget 30: mit eingestellten 20+20 passt nur eine, mit gelernten 12+12 passen beide.
+  const tasks = [mkTask('a', 7, 20, MONDAY - 9, { learnedMinutes: 12 }), mkTask('b', 7, 20, MONDAY - 8, { learnedMinutes: 12 })];
+  const [day] = S.planDays(state(tasks), MONDAY, 1);
+  assert.deepStrictEqual(day.items.map((i) => i.task.id), ['a', 'b']);
+});
+
+test('bonusCandidates: dringendste passende Aufgabe zuerst', () => {
+  const tasks = [
+    mkTask('a', 10, 5, MONDAY - 6), // 60 %
+    mkTask('b', 10, 5, MONDAY - 9), // 90 %
+    mkTask('c', 10, 30, MONDAY - 9), // passt nicht in die Restzeit
+    mkTask('d', 10, 5, MONDAY - 2), // noch zu sauber
+    mkTask('e', 10, 5, MONDAY - 9), // schon im Timer
+  ];
+  const ids = S.bonusCandidates(state(tasks), MONDAY, ['e'], 10).map((t) => t.id);
+  assert.deepStrictEqual(ids, ['b', 'a']);
+});

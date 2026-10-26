@@ -6,6 +6,9 @@ verteilt die Arbeit nach deinem Zeitbudget auf die Woche und sagt dir jeden Tag,
 ## Funktionen
 
 - **Heute-Ansicht** – die Aufgaben für heute, mit Fortschrittsring, Abhaken, Rückgängig, Verschieben und Überspringen.
+- **Putz-Timer** – Timer mit deiner Zeit starten und währenddessen abhaken. Bist du schneller, kommt eine
+  Bonus-Aufgabe dazu; was bei Ablauf offen ist, wird auf morgen verschoben. Aus der Zeit zwischen zwei
+  Häkchen lernt die App, wie lange du für jede Aufgabe wirklich brauchst (⏱), und plant damit.
 - **Automatischer Wochenplan** – Aufgaben werden nach Dringlichkeit auf die nächsten 7 Tage verteilt.
   Ist ein Tag voll, rutscht der Rest auf den nächsten Tag; bleibt Zeit übrig, werden bald fällige Aufgaben vorgezogen.
 - **Zeitbudget pro Wochentag** – z. B. 20 Min. unter der Woche, 1 Std. am Samstag, Sonntag frei.
