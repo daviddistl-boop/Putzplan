@@ -9,6 +9,8 @@ verteilt die Arbeit nach deinem Zeitbudget auf die Woche und sagt dir jeden Tag,
 - **Putz-Timer** – Timer mit deiner Zeit starten und währenddessen abhaken. Bist du schneller, kommt eine
   Bonus-Aufgabe dazu; was bei Ablauf offen ist, wird auf morgen verschoben. Aus der Zeit zwischen zwei
   Häkchen lernt die App, wie lange du für jede Aufgabe wirklich brauchst (⏱), und plant damit.
+  Im Timer kannst du Aufgaben dazunehmen (auch eigene, auf Wunsch einmalige) und per ⇄ gegen
+  dringendere tauschen – die getauschte Aufgabe wandert auf morgen.
 - **Saug- & Wischroboter** – einschalten, und Staubsaugen bzw. Boden wischen fallen aus dem Plan (pro Raum
   abwählbar). Dafür kommen Wartungsaufgaben wie „Staubbehälter leeren“ oder „Wassertank auffüllen“ dazu.
 - **Automatischer Wochenplan** – Aufgaben werden nach Dringlichkeit auf die nächsten 7 Tage verteilt.

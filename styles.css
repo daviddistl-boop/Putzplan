@@ -314,3 +314,9 @@ h2 { font-size: 1.05rem; margin: 1.4em 0 0.6em; }
 .onboard-robot { text-align: left; background: var(--surface); border-radius: var(--radius); padding: 4px 16px 8px; margin-top: 8px; }
 .onboard-robot p { margin: 10px 0 4px; }
 .onboard-robot .switch-row:last-child { border-bottom: 0; }
+
+/* Timer: Aufgaben tauschen & hinzufügen */
+.session-list .icon-btn { flex: none; }
+.pick-list { margin: 10px 0 4px; max-height: 50vh; overflow: auto; }
+.pick-row { cursor: pointer; box-shadow: none; background: var(--surface-2); }
+.modal .input[type="search"] { margin-top: 10px; }

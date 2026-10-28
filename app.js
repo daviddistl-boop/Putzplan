@@ -162,6 +162,12 @@
       entry.prevDurations = t.durations ? t.durations.slice() : null;
       S.recordDuration(t, o.actualMs / MIN);
     }
+    if (t.oneOff) {
+      // Einmalige Aufgabe: nach dem Erledigen archivieren (bleibt für den Verlauf erhalten).
+      entry.oneOff = true;
+      t.archived = true;
+      t.paused = true;
+    }
     state.history.push(entry);
     t.lastDone = day;
     t.snoozedUntil = null;
@@ -198,6 +204,10 @@
     if (t) {
       t.lastDone = h.prevLastDone;
       t.snoozedUntil = h.prevSnoozed;
+      if (h.oneOff) {
+        t.archived = false;
+        t.paused = false;
+      }
       if (h.session) {
         t.learnedMinutes = h.prevLearned || undefined;
         t.durations = h.prevDurations || undefined;
@@ -294,6 +304,7 @@
       lastMark: 0,
       taskIds: plan.items.map((i) => i.task.id),
       bonusIds: [],
+      addedIds: [],
       doneIds: [],
       times: {},
       memberIds: Object.fromEntries(plan.items.map((i) => [i.task.id, i.memberId])),
@@ -320,6 +331,182 @@
     s.allDone = false;
     if (!silent) toast(`Du bist schneller! ✨ Dazu kommt: ${next.name}`);
     return true;
+  }
+
+  // Zusätzliche Aufgaben im Timer: von Hand dazugenommen oder als Bonus.
+  // Sie wandern am Ende nicht auf morgen, weil sie heute gar nicht geplant waren.
+  function sessionExtraIds(s) {
+    return new Set(s.bonusIds.concat(s.addedIds || []));
+  }
+
+  /** Aufgaben, die man im Timer dazunehmen oder eintauschen kann – dringendste zuerst. */
+  function pickCandidates(excludeIds) {
+    const today = S.today();
+    const exclude = new Set(excludeIds.concat(doneTodayIds()));
+    return state.tasks
+      .filter((t) => !t.paused && !t.archived && !exclude.has(t.id) && !S.robotHandles(t, state.settings))
+      .sort((a, b) => S.urgency(b, today) - S.urgency(a, today));
+  }
+
+  /**
+   * Auswahl-Dialog mit Suchfeld. `compareTo`: beim Tauschen die bisherige Aufgabe,
+   * damit dringendere Aufgaben markiert werden können.
+   */
+  function taskPicker({ title, intro, excludeIds, compareTo, extraButtons, onPick }) {
+    const today = S.today();
+    const all = pickCandidates(excludeIds);
+    const refU = compareTo ? S.urgency(compareTo, today) : null;
+    const row = (t) => {
+      const r = room(t.roomId);
+      const u = S.urgency(t, today);
+      const urgent = refU !== null && u > refU + 0.05;
+      return `<li class="row pick-row" data-pick="${t.id}">
+        <span class="room-icon">${r ? r.icon : '🧽'}</span>
+        <div class="row-main">
+          <div class="row-title">${esc(t.name)}</div>
+          <div class="row-sub">${r ? esc(r.name) : ''} · ${minutesLabel(t)} · <span class="${u >= 1 ? 'bad-text' : ''}">${dueText(t)}</span>
+            ${urgent ? '<span class="badge bad">dringender</span>' : ''}</div>
+          <div class="dirt"><span style="width:${Math.min(100, u * 100)}%;background:${dirtColor(u)}"></span></div>
+        </div>
+      </li>`;
+    };
+    openModal(`
+      <h2>${title}</h2>
+      ${intro ? `<p class="muted small">${intro}</p>` : ''}
+      ${extraButtons || ''}
+      <input class="input" type="search" placeholder="🔍 Aufgabe oder Raum suchen" data-pick-search>
+      <ul class="list pick-list"></ul>
+      <button class="btn block" data-cancel>Abbrechen</button>`, (el) => {
+      const list = el.querySelector('.pick-list');
+      const draw = (q) => {
+        const query = q.trim().toLowerCase();
+        const items = all.filter((t) => {
+          if (!query) return true;
+          const r = room(t.roomId);
+          return t.name.toLowerCase().includes(query) || (r && r.name.toLowerCase().includes(query));
+        }).slice(0, 40);
+        list.innerHTML = items.length ? items.map(row).join('') : '<p class="muted small center">Keine passende Aufgabe.</p>';
+      };
+      draw('');
+      el.querySelector('[data-pick-search]').oninput = (ev) => draw(ev.target.value);
+      list.onclick = (ev) => {
+        const li = ev.target.closest('[data-pick]');
+        if (!li) return;
+        closeModal();
+        onPick(li.dataset.pick);
+      };
+      el.querySelector('[data-cancel]').onclick = closeModal;
+    });
+  }
+
+  function addToSession(taskId, how) {
+    const s = state.session;
+    if (!s || s.taskIds.includes(taskId)) return;
+    s.taskIds.push(taskId);
+    if (!s.addedIds) s.addedIds = [];
+    s.addedIds.push(taskId);
+    s.memberIds[taskId] = task(taskId).assignee || null;
+    s.allDone = false;
+    save();
+    syncTimerAlarm();
+    render();
+    toast(`${how === 'new' ? 'Neu angelegt' : 'Dazugenommen'}: ${task(taskId).name}`);
+  }
+
+  /** „＋ Aufgabe hinzufügen“ im Timer: vorhandene Aufgabe wählen oder eigene anlegen. */
+  function sessionAddDialog() {
+    const s = state.session;
+    taskPicker({
+      title: '＋ Aufgabe dazunehmen',
+      intro: 'Wähle eine Aufgabe aus deinem Plan oder lege eine eigene an.',
+      excludeIds: s.taskIds,
+      extraButtons: '<button class="btn primary block" data-new-task>✎ Eigene Aufgabe anlegen</button>',
+      onPick: (id) => addToSession(id),
+    });
+    const btn = document.querySelector('#modal-root [data-new-task]');
+    if (btn) btn.onclick = () => { closeModal(); quickTaskDialog((id) => addToSession(id, 'new')); };
+  }
+
+  /** Schnell eine eigene Aufgabe anlegen – auf Wunsch nur einmalig. */
+  function quickTaskDialog(onCreated) {
+    const rooms = state.rooms.filter((r) => !r.robot);
+    openModal(`
+      <h2>Eigene Aufgabe</h2>
+      <form class="form">
+        <label>Was willst du machen?<input class="input" name="name" required placeholder="z. B. Keller aufräumen" autofocus></label>
+        <label>Raum<select class="input" name="roomId">${rooms.map((r) => `<option value="${r.id}">${r.icon} ${esc(r.name)}</option>`).join('')}</select></label>
+        <label>Dauer (Minuten)<input class="input" type="number" min="1" max="480" name="minutes" value="10"></label>
+        <label>Wiederholen?<select class="input" name="interval">
+          <option value="0">Nur dieses eine Mal</option>
+          ${T.INTERVALS.map(([d, l]) => `<option value="${d}">${l}</option>`).join('')}
+        </select></label>
+        <div class="btn-row">
+          <button type="button" class="btn" data-cancel>Abbrechen</button>
+          <button type="submit" class="btn primary">Dazunehmen</button>
+        </div>
+      </form>`, (el) => {
+      el.querySelector('[data-cancel]').onclick = closeModal;
+      el.querySelector('form').onsubmit = (ev) => {
+        ev.preventDefault();
+        const f = ev.target;
+        const name = f.name.value.trim();
+        if (!name) return;
+        const interval = parseInt(f.interval.value, 10) || 0;
+        const t = {
+          id: uid(), roomId: f.roomId.value, name,
+          interval: interval || 365, minutes: Math.max(1, parseInt(f.minutes.value, 10) || 10),
+          lastDone: S.today() - (interval || 365), assignee: null, paused: false, snoozedUntil: null,
+        };
+        if (!interval) t.oneOff = true;
+        state.tasks.push(t);
+        closeModal();
+        onCreated(t.id);
+      };
+    });
+  }
+
+  /** Eine offene Aufgabe im Timer gegen eine andere tauschen (oder nur herausnehmen). */
+  function sessionSwapDialog(taskId) {
+    const s = state.session;
+    const old = task(taskId);
+    const extra = sessionExtraIds(s).has(taskId);
+    const fate = extra ? 'fliegt aus dem Timer' : 'wandert auf morgen';
+    taskPicker({
+      title: `⇄ „${esc(old.name)}“ tauschen`,
+      intro: `Wähle, was stattdessen dran ist. „${esc(old.name)}“ ${fate}.`,
+      excludeIds: s.taskIds,
+      compareTo: old,
+      extraButtons: `<button class="btn block" data-remove-only>✕ Nur herausnehmen (${fate})</button>`,
+      onPick: (newId) => swapInSession(taskId, newId),
+    });
+    const btn = document.querySelector('#modal-root [data-remove-only]');
+    if (btn) btn.onclick = () => { closeModal(); swapInSession(taskId, null); };
+  }
+
+  function swapInSession(oldId, newId) {
+    const s = state.session;
+    const extra = sessionExtraIds(s);
+    const wasExtra = extra.has(oldId);
+    const idx = s.taskIds.indexOf(oldId);
+    if (idx < 0) return;
+    if (newId) {
+      s.taskIds.splice(idx, 1, newId);
+      s.memberIds[newId] = s.memberIds[oldId] || task(newId).assignee || null;
+      // Wer eine geplante Aufgabe ersetzt, übernimmt deren Platz im Plan.
+      if (wasExtra) (s.addedIds = s.addedIds || []).push(newId);
+    } else {
+      s.taskIds.splice(idx, 1);
+    }
+    s.bonusIds = s.bonusIds.filter((id) => id !== oldId);
+    s.addedIds = (s.addedIds || []).filter((id) => id !== oldId);
+    delete s.memberIds[oldId];
+    const old = task(oldId);
+    if (!wasExtra) old.snoozedUntil = S.today() + 1;
+    if (!sessionOpenIds(s).length && !s.timeUp) s.allDone = !addBonusTask(true);
+    save();
+    syncTimerAlarm();
+    render();
+    toast(newId ? `Getauscht: ${task(newId).name}${wasExtra ? '' : ` · „${old.name}“ auf morgen`}` : `„${old.name}“ ${wasExtra ? 'herausgenommen' : 'auf morgen verschoben'}`);
   }
 
   function sessionToggle(taskId) {
@@ -377,11 +564,11 @@
     const s = state.session;
     if (!s) return;
     const open = sessionOpenIds(s);
-    const bonus = new Set(s.bonusIds);
+    const extra = sessionExtraIds(s);
     let moved = 0;
     if (moveOpen) {
       for (const id of open) {
-        if (bonus.has(id)) continue; // Bonus-Aufgaben waren noch gar nicht fällig.
+        if (extra.has(id)) continue; // Zusatzaufgaben waren heute gar nicht geplant.
         task(id).snoozedUntil = S.today() + 1;
         moved++;
       }
@@ -399,7 +586,8 @@
 
   function confirmEndSession() {
     const s = state.session;
-    const open = sessionOpenIds(s).filter((id) => !s.bonusIds.includes(id));
+    const extra = sessionExtraIds(s);
+    const open = sessionOpenIds(s).filter((id) => !extra.has(id));
     if (!open.length) { endSession(false); return; }
     openModal(`
       <h2>Timer beenden?</h2>
@@ -485,13 +673,15 @@
     const open = sessionOpenIds(s);
     const doneSet = new Set(s.doneIds);
     const bonus = new Set(s.bonusIds);
+    const added = new Set(s.addedIds || []);
+    const extra = sessionExtraIds(s);
     const ids = s.taskIds.filter((id) => task(id));
     // Offene zuerst, Erledigte unten.
     ids.sort((a, b) => (doneSet.has(a) ? 1 : 0) - (doneSet.has(b) ? 1 : 0));
 
     let banner = '';
     if (s.timeUp) {
-      const moveCount = open.filter((id) => !bonus.has(id)).length;
+      const moveCount = open.filter((id) => !extra.has(id)).length;
       banner = `<div class="session-banner ${moveCount ? 'warn' : 'good'}">
           <strong>⏰ Zeit um!</strong>
           <p>${s.doneIds.length} geschafft${moveCount ? ` · ${moveCount} wandert auf morgen` : ''}.</p>
@@ -524,7 +714,7 @@
         const t = task(id);
         const r = room(t.roomId);
         const isDone = doneSet.has(id);
-        const willMove = s.timeUp && !isDone && !bonus.has(id);
+        const willMove = s.timeUp && !isDone && !extra.has(id);
         return `<li class="row ${isDone ? 'done' : ''}" data-action="session-toggle" data-id="${id}">
           <span class="check ${isDone ? 'checked' : ''}" aria-hidden="true">${isDone ? '✓' : ''}</span>
           <span class="room-icon">${r ? r.icon : '🧽'}</span>
@@ -533,12 +723,18 @@
             <div class="row-sub">${r ? esc(r.name) : ''} ·
               ${isDone ? `in ${fmtClock(s.times[id] || 0)} Min.` : `ca. ${fmtMinutes(S.estimate(t))}`}
               ${bonus.has(id) ? '<span class="badge good">Bonus ✨</span>' : ''}
+              ${added.has(id) ? '<span class="badge">Dazugenommen</span>' : ''}
+              ${task(id).oneOff ? '<span class="badge">Einmalig</span>' : ''}
               ${willMove ? '<span class="badge">→ morgen</span>' : ''}</div>
           </div>
           ${avatar(member(s.memberIds[id]))}
+          ${isDone ? '' : `<button class="icon-btn" data-action="session-swap" data-id="${id}" title="Tauschen">⇄</button>`}
         </li>`;
       }).join('')}</ul>
-      ${!s.timeUp && !s.allDone && sessionRemaining(s) > 2 * MIN ? '<button class="link" data-action="session-more">＋ Noch eine Aufgabe dazunehmen</button>' : ''}
+      <div class="btn-row">
+        <button class="btn" data-action="session-add">＋ Aufgabe hinzufügen</button>
+        ${!s.timeUp && sessionRemaining(s) > 2 * MIN ? '<button class="btn" data-action="session-more">✨ Passende vorschlagen</button>' : ''}
+      </div>
       <p class="muted small center">Tipp: Hake jede Aufgabe direkt ab, wenn du fertig bist – so lernt die App, wie lange du wirklich brauchst.</p>`;
   }
 
@@ -679,7 +875,7 @@
     const today = S.today();
     if (ui.roomId && room(ui.roomId)) return viewRoom(room(ui.roomId));
     const cards = state.rooms.map((r) => {
-      const tasks = state.tasks.filter((t) => t.roomId === r.id);
+      const tasks = state.tasks.filter((t) => t.roomId === r.id && !t.archived);
       const pct = S.roomCleanliness(tasks, today, state.settings);
       const due = tasks.filter((t) => S.isPlannable(t, today, state.settings) && S.urgency(t, today) >= 1).length;
       return `<button class="room-card" data-action="open-room" data-id="${r.id}">
@@ -702,7 +898,7 @@
 
   function viewRoom(r) {
     const today = S.today();
-    const tasks = state.tasks.filter((t) => t.roomId === r.id)
+    const tasks = state.tasks.filter((t) => t.roomId === r.id && !t.archived)
       .sort((a, b) => S.dueDay(a) - S.dueDay(b));
     const pct = S.roomCleanliness(tasks, today, state.settings);
     return `
@@ -1477,6 +1673,8 @@
       case 'session-end': confirmEndSession(); break;
       case 'session-extend': extendSession(5); break;
       case 'session-finish': endSession(true); break;
+      case 'session-add': sessionAddDialog(); break;
+      case 'session-swap': sessionSwapDialog(id); break;
       case 'session-more':
         if (!addBonusTask(false)) toast('Gerade passt keine weitere Aufgabe in die Restzeit.');
         save(); render();
