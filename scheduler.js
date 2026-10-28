@@ -37,13 +37,26 @@
     return (((day + 3) % 7) + 7) % 7;
   }
 
+  /**
+   * Folgeaufgaben (z. B. „Wäsche abnehmen“ nach „Wäsche aufhängen“) haben kein festes
+   * Intervall: Sie werden fällig, wenn ihre Auslöser-Aufgabe erledigt wurde
+   * (task.trigger = { afterTaskId, delayDays }, task.dueOn = Fälligkeitstag oder null).
+   * Ab dem Fälligkeitstag sind sie dringender als alles andere.
+   */
+  function followUpUrgency(dueOn, day) {
+    if (dueOn === null || dueOn === undefined || day < dueOn) return 0;
+    return 2 + (day - dueOn);
+  }
+
   function urgency(task, day, lastDone) {
+    if (task.trigger) return followUpUrgency(task.dueOn, day);
     const last = lastDone !== undefined ? lastDone : task.lastDone;
     if (last === null || last === undefined) return 1;
     return Math.max(0, (day - last) / Math.max(1, task.interval));
   }
 
   function dueDay(task) {
+    if (task.trigger) return task.dueOn === null || task.dueOn === undefined ? Infinity : task.dueOn;
     if (task.lastDone === null || task.lastDone === undefined) return today();
     return task.lastDone + task.interval;
   }
@@ -155,6 +168,14 @@
     const settings = state.settings || {};
     const done = new Set(doneToday || []);
     const sim = new Map(tasks.map((t) => [t.id, t.lastDone]));
+    // Fälligkeit der Folgeaufgaben in der Simulation – und wer wen auslöst.
+    const simDue = new Map(tasks.filter((t) => t.trigger).map((t) => [t.id, t.dueOn]));
+    const followUps = new Map();
+    for (const t of tasks) {
+      if (!t.trigger) continue;
+      if (!followUps.has(t.trigger.afterTaskId)) followUps.set(t.trigger.afterTaskId, []);
+      followUps.get(t.trigger.afterTaskId).push(t);
+    }
     const weekLoad = {};
     const plan = [];
 
@@ -170,7 +191,8 @@
 
       const eligible = tasks.filter((t) => isPlannable(t, day, settings) && !(i === 0 && done.has(t.id)));
       const scored = eligible
-        .map((t) => ({ task: t, u: urgency(t, day, sim.get(t.id)) }))
+        .map((t) => ({ task: t, u: t.trigger ? followUpUrgency(simDue.get(t.id), day) : urgency(t, day, sim.get(t.id)) }))
+        .filter((e) => !e.task.trigger || e.u > 0)
         .sort((a, b) => b.u - a.u || a.task.interval - b.task.interval);
 
       let used = 0;
@@ -183,10 +205,15 @@
         items.push({ task: entry.task, urgency: entry.u, memberId, early: entry.u < 1 });
         used += estimate(entry.task);
         sim.set(entry.task.id, day);
+        if (entry.task.trigger) simDue.set(entry.task.id, null);
+        for (const f of followUps.get(entry.task.id) || []) simDue.set(f.id, day + (f.trigger.delayDays || 0));
       };
 
+      // 0. Fällige Folgeaufgaben kommen immer dran – auch an freien Tagen (die Wäsche muss ab).
+      for (const e of scored) if (e.task.trigger) take(e);
       // 1. Fällige Aufgaben nach Dringlichkeit.
       for (const e of scored) {
+        if (e.task.trigger) continue;
         if (e.u < 1) break;
         // Tägliche Aufgaben passen immer rein – sie wären sonst sofort wieder fällig.
         if (budget <= 0) break;
@@ -194,7 +221,7 @@
       }
       // 2. Freie Zeit mit bald fälligen Aufgaben füllen.
       for (const e of scored) {
-        if (e.u >= 1 || e.u < PREFILL_THRESHOLD) continue;
+        if (e.task.trigger || e.u >= 1 || e.u < PREFILL_THRESHOLD) continue;
         if (e.task.interval < 3) continue; // Kurze Intervalle lohnen sich nicht vorzuziehen.
         if (used + estimate(e.task) <= budget) take(e);
       }

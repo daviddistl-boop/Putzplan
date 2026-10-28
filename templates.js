@@ -89,8 +89,8 @@
     {
       key: 'laundry', name: 'Waschküche', icon: '🧺',
       tasks: [
-        ['Wäsche waschen', 3, 10],
-        ['Wäsche zusammenlegen', 3, 15],
+        ['Wäsche waschen & aufhängen', 3, 15], // Folgeaufgabe „Wäsche abnehmen“ kommt automatisch dazu
+        ['Wäsche zusammenlegen & wegräumen', 3, 15],
         ['Waschmaschine reinigen', 60, 15],
       ],
     },

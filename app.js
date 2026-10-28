@@ -35,6 +35,10 @@
   }
 
   let state = load();
+  if (!state.settings.autoFollowUps) {
+    state.settings.autoFollowUps = true;
+    state.tasks.slice().forEach((t) => autoFollowUp(t));
+  }
   let ui = { tab: 'today', roomId: null, showMore: false };
 
   function save() {
@@ -70,6 +74,39 @@
     return state.history.filter((h) => h.day === d && !h.skipped).map((h) => h.taskId);
   }
 
+  // ---------------------------------------------------------------- Folgeaufgaben
+  //
+  // Eine Aufgabe kann eine Folgeaufgabe auslösen, z. B. „Wäsche aufhängen“ →
+  // am nächsten Tag „Wäsche abnehmen“. Die Folgeaufgabe hat kein eigenes
+  // Intervall; sie wird fällig, sobald die auslösende Aufgabe erledigt ist.
+
+  const followUpsOf = (taskId) => state.tasks.filter((t) => t.trigger && t.trigger.afterTaskId === taskId);
+  const DELAY_LABELS = ['Am selben Tag', 'Am nächsten Tag', 'Nach 2 Tagen', 'Nach 3 Tagen'];
+
+  function setFollowUp(parent, name, delayDays) {
+    const existing = followUpsOf(parent.id)[0];
+    if (!name) {
+      if (existing) state.tasks = state.tasks.filter((t) => t.id !== existing.id);
+      return;
+    }
+    if (existing) {
+      existing.name = name;
+      existing.trigger.delayDays = delayDays;
+      return;
+    }
+    state.tasks.push({
+      id: uid(), roomId: parent.roomId, name, interval: parent.interval, minutes: 10,
+      lastDone: null, assignee: parent.assignee || null, paused: false, snoozedUntil: null,
+      trigger: { afterTaskId: parent.id, delayDays }, dueOn: null, oneOff: parent.oneOff || undefined,
+    });
+  }
+
+  // Bekannte Paare, die automatisch eingerichtet werden.
+  function autoFollowUp(t) {
+    if (t.trigger || followUpsOf(t.id).length) return;
+    if (/w(ä|ae)sche.*aufh(ä|ae)ng/i.test(t.name)) setFollowUp(t, 'Wäsche abnehmen', 1);
+  }
+
   // ---------------------------------------------------------------- Helfer
 
   function esc(s) {
@@ -99,6 +136,10 @@
 
   function dueText(t) {
     if (t.paused) return 'Pausiert';
+    if (t.trigger && (t.dueOn === null || t.dueOn === undefined)) {
+      const parent = task(t.trigger.afterTaskId);
+      return parent ? `Kommt nach „${parent.name}“` : 'Wartet';
+    }
     const today = S.today();
     if (t.snoozedUntil && t.snoozedUntil > today) return `Verschoben auf ${dayLabel(t.snoozedUntil)}`;
     const diff = S.dueDay(t) - today;
@@ -162,6 +203,10 @@
       entry.prevDurations = t.durations ? t.durations.slice() : null;
       S.recordDuration(t, o.actualMs / MIN);
     }
+    // Folgeaufgaben auslösen bzw. die erledigte Folgeaufgabe zurücksetzen.
+    entry.followUps = followUpsOf(t.id).map((f) => ({ id: f.id, prev: f.dueOn ?? null }));
+    for (const f of followUpsOf(t.id)) f.dueOn = day + (f.trigger.delayDays || 0);
+    if (t.trigger) { entry.prevDueOn = t.dueOn ?? null; t.dueOn = null; }
     if (t.oneOff) {
       // Einmalige Aufgabe: nach dem Erledigen archivieren (bleibt für den Verlauf erhalten).
       entry.oneOff = true;
@@ -180,6 +225,7 @@
   function skipTask(taskId) {
     const t = task(taskId);
     const entry = { id: uid(), taskId, day: S.today(), memberId: null, minutes: 0, skipped: true, prevLastDone: t.lastDone, prevSnoozed: t.snoozedUntil || null };
+    if (t.trigger) { entry.prevDueOn = t.dueOn ?? null; t.dueOn = null; }
     state.history.push(entry);
     t.lastDone = S.today();
     t.snoozedUntil = null;
@@ -204,6 +250,11 @@
     if (t) {
       t.lastDone = h.prevLastDone;
       t.snoozedUntil = h.prevSnoozed;
+      if (h.prevDueOn !== undefined) t.dueOn = h.prevDueOn;
+      for (const f of h.followUps || []) {
+        const ft = task(f.id);
+        if (ft) ft.dueOn = f.prev;
+      }
       if (h.oneOff) {
         t.archived = false;
         t.paused = false;
@@ -344,7 +395,8 @@
     const today = S.today();
     const exclude = new Set(excludeIds.concat(doneTodayIds()));
     return state.tasks
-      .filter((t) => !t.paused && !t.archived && !exclude.has(t.id) && !S.robotHandles(t, state.settings))
+      .filter((t) => !t.paused && !t.archived && !exclude.has(t.id) && !S.robotHandles(t, state.settings)
+        && !(t.trigger && (t.dueOn === null || t.dueOn === undefined)))
       .sort((a, b) => S.urgency(b, today) - S.urgency(a, today));
   }
 
@@ -459,6 +511,7 @@
         };
         if (!interval) t.oneOff = true;
         state.tasks.push(t);
+        autoFollowUp(t);
         closeModal();
         onCreated(t.id);
       };
@@ -756,6 +809,7 @@
         id: uid(), roomId: r.id, name, interval, minutes,
         lastDone: today - Math.round(interval * frac), assignee: null, paused: false, snoozedUntil: null,
       });
+      autoFollowUp(state.tasks[state.tasks.length - 1]);
     });
     return r;
   }
@@ -925,7 +979,7 @@
           <button class="check" data-action="complete" data-id="${t.id}" data-member="${t.assignee || ''}" title="Jetzt erledigt"></button>
           <div class="row-main" data-action="edit-task" data-id="${t.id}">
             <div class="row-title">${esc(t.name)}</div>
-            <div class="row-sub">${intervalLabel(t.interval)} · ${minutesLabel(t)} · <span class="${overdue ? 'bad-text' : ''}">${dueText(t)}</span></div>
+            <div class="row-sub">${t.trigger ? '↪ Folgeaufgabe' : intervalLabel(t.interval)} · ${minutesLabel(t)} · <span class="${overdue ? 'bad-text' : ''}">${dueText(t)}</span></div>
             <div class="dirt"><span style="width:${Math.min(100, u * 100)}%;background:${dirtColor(u)}"></span></div>
           </div>
           ${avatar(member(t.assignee))}
@@ -1109,6 +1163,17 @@
     });
   }
 
+  function followUpFields(t) {
+    const f = t.id ? followUpsOf(t.id)[0] : null;
+    const delay = f ? f.trigger.delayDays : 1;
+    return `<details class="follow" ${f ? 'open' : ''}>
+        <summary>↪ Folgeaufgabe ${f ? `: ${esc(f.name)}` : '(optional)'}</summary>
+        <p class="small muted">Wird fällig, nachdem du diese Aufgabe erledigt hast – z. B. „Wäsche abnehmen“ nach „Wäsche aufhängen“.</p>
+        <label>Danach zu tun<input class="input" name="followName" value="${f ? esc(f.name) : ''}" placeholder="z. B. Wäsche abnehmen"></label>
+        <label>Fällig<select class="input" name="followDelay">${DELAY_LABELS.map((l, i) => `<option value="${i}" ${i === delay ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      </details>`;
+  }
+
   function editTask(taskId, roomId) {
     const t = taskId ? task(taskId) : { name: '', interval: 7, minutes: 10, roomId, assignee: null, paused: false };
     const presetMatch = T.INTERVALS.some(([d]) => d === t.interval);
@@ -1117,10 +1182,14 @@
       <form id="task-form" class="form">
         <label>Was ist zu tun?<input class="input" name="name" required value="${esc(t.name)}" placeholder="z. B. Fenster putzen"></label>
         <label>Raum<select class="input" name="roomId">${state.rooms.map((r) => `<option value="${r.id}" ${r.id === t.roomId ? 'selected' : ''}>${r.icon} ${esc(r.name)}</option>`).join('')}</select></label>
+        ${t.trigger ? `
+        <input type="hidden" name="intervalPreset" value="${t.interval}">
+        <p class="small learned">↪ Folgeaufgabe von „${esc((task(t.trigger.afterTaskId) || { name: '?' }).name)}“ – wird fällig, sobald diese erledigt ist.</p>
+        <label>Fällig<select class="input" name="delay">${DELAY_LABELS.map((l, i) => `<option value="${i}" ${i === t.trigger.delayDays ? 'selected' : ''}>${l}</option>`).join('')}</select></label>` : `
         <label>Wie oft?<select class="input" name="intervalPreset">
           ${T.INTERVALS.map(([d, l]) => `<option value="${d}" ${d === t.interval ? 'selected' : ''}>${l}</option>`).join('')}
           <option value="custom" ${presetMatch ? '' : 'selected'}>Eigenes Intervall…</option></select></label>
-        <label class="custom-interval" ${presetMatch ? 'hidden' : ''}>Alle … Tage<input class="input" type="number" min="1" max="730" name="interval" value="${t.interval}"></label>
+        <label class="custom-interval" ${presetMatch ? 'hidden' : ''}>Alle … Tage<input class="input" type="number" min="1" max="730" name="interval" value="${t.interval}"></label>`}
         <label>Dauer (Minuten)<input class="input" type="number" min="1" max="480" name="minutes" value="${t.minutes}"></label>
         ${t.learnedMinutes ? `<p class="small learned">⏱ Gelernt aus ${t.durations.length} Messung${t.durations.length === 1 ? '' : 'en'}: du brauchst ca. <strong>${fmtMinutes(t.learnedMinutes)}</strong>.
           Der Plan rechnet damit. Änderst du die Dauer oben, wird neu gelernt.</p>` : ''}
@@ -1128,7 +1197,8 @@
           ${[['', 'Keine Bodenaufgabe'], ['vacuum', 'Staubsaugen (Saugroboter)'], ['mop', 'Boden wischen (Wischroboter)']]
             .map(([v, l]) => `<option value="${v}" ${S.floorType(t) === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>` : ''}
         ${state.members.length ? `<label>Zuständig<select class="input" name="assignee">${memberOptions(t.assignee, 'Automatisch verteilen')}</select></label>` : ''}
-        ${taskId ? `<label class="check-label"><input type="checkbox" name="paused" ${t.paused ? 'checked' : ''}> Pausieren (z. B. im Urlaub)</label>` : `
+        ${t.trigger ? '' : followUpFields(t)}
+        ${taskId ? `<label class="check-label"><input type="checkbox" name="paused" ${t.paused ? 'checked' : ''}> Pausieren (z. B. im Urlaub)</label>` : t.trigger ? '' : `
           <label>Zuletzt erledigt<select class="input" name="last">
             <option value="0">Gerade eben</option><option value="half" selected>Ist mal wieder dran</option><option value="due">Sofort fällig</option></select></label>`}
         <div class="btn-row">
@@ -1139,13 +1209,15 @@
       </form>`, (el) => {
       const form = el.querySelector('form');
       form.intervalPreset.onchange = () => {
-        el.querySelector('.custom-interval').hidden = form.intervalPreset.value !== 'custom';
+        const custom = el.querySelector('.custom-interval');
+        if (custom) custom.hidden = form.intervalPreset.value !== 'custom';
       };
       el.querySelector('[data-cancel]').onclick = closeModal;
       const del = el.querySelector('[data-del]');
       if (del) del.onclick = () => {
         if (!confirm(`„${t.name}“ wirklich löschen?`)) return;
-        state.tasks = state.tasks.filter((x) => x.id !== taskId);
+        const follow = new Set(followUpsOf(taskId).map((f) => f.id));
+        state.tasks = state.tasks.filter((x) => x.id !== taskId && !follow.has(x.id));
         save(); closeModal(); render();
       };
       form.onsubmit = (ev) => {
@@ -1160,13 +1232,23 @@
         };
         if (!data.name) return;
         if (form.floor) data.floor = form.floor.value;
+        let saved = t;
         if (taskId) {
           if (data.minutes !== t.minutes) { delete t.learnedMinutes; delete t.durations; }
           Object.assign(t, data, { paused: form.paused.checked });
+          if (t.trigger && form.delay) t.trigger.delayDays = parseInt(form.delay.value, 10) || 0;
         } else {
           const today = S.today();
           const last = form.last.value === '0' ? today : form.last.value === 'due' ? today - data.interval : today - Math.ceil(data.interval / 2);
-          state.tasks.push(Object.assign({ id: uid(), lastDone: last, paused: false, snoozedUntil: null }, data));
+          saved = Object.assign({ id: uid(), lastDone: last, paused: false, snoozedUntil: null }, data);
+          state.tasks.push(saved);
+        }
+        if (form.followName) {
+          const fname = form.followName.value.trim();
+          const hadFollowUp = followUpsOf(saved.id).length > 0;
+          if (fname || hadFollowUp) setFollowUp(saved, fname, parseInt(form.followDelay.value, 10) || 0);
+          // Neue Aufgabe ohne eigene Angabe: bekannte Paare (Wäsche aufhängen → abnehmen) einrichten.
+          else if (!taskId) autoFollowUp(saved);
         }
         save(); closeModal(); render();
       };

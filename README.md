@@ -13,6 +13,8 @@ verteilt die Arbeit nach deinem Zeitbudget auf die Woche und sagt dir jeden Tag,
   dringendere tauschen – die getauschte Aufgabe wandert auf morgen.
 - **Saug- & Wischroboter** – einschalten, und Staubsaugen bzw. Boden wischen fallen aus dem Plan (pro Raum
   abwählbar). Dafür kommen Wartungsaufgaben wie „Staubbehälter leeren“ oder „Wassertank auffüllen“ dazu.
+- **Folgeaufgaben** – z. B. nach „Wäsche aufhängen“ steht am nächsten Tag „Wäsche abnehmen“ auf dem Plan
+  (wird automatisch eingerichtet; für jede Aufgabe im Bearbeiten-Dialog frei festlegbar).
 - **Automatischer Wochenplan** – Aufgaben werden nach Dringlichkeit auf die nächsten 7 Tage verteilt.
   Ist ein Tag voll, rutscht der Rest auf den nächsten Tag; bleibt Zeit übrig, werden bald fällige Aufgaben vorgezogen.
 - **Zeitbudget pro Wochentag** – z. B. 20 Min. unter der Woche, 1 Std. am Samstag, Sonntag frei.

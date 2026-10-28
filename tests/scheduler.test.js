@@ -163,3 +163,27 @@ test('Roboter übernimmt Boden-Aufgaben – außer in ausgenommenen Räumen', ()
   // Roboter-Aufgaben zählen nicht in die Sauberkeit des Raums.
   assert.strictEqual(S.roomCleanliness([tasks[0]], MONDAY, settings), 100);
 });
+
+test('Folgeaufgabe: Wäsche abnehmen am Tag nach dem Aufhängen', () => {
+  const tasks = [
+    mkTask('auf', 3, 10, MONDAY - 3, { name: 'Wäsche aufhängen' }),
+    mkTask('ab', 365, 10, null, { name: 'Wäsche abnehmen', trigger: { afterTaskId: 'auf', delayDays: 1 }, dueOn: null }),
+  ];
+  const plan = S.planDays(state(tasks), MONDAY, 5);
+  const ids = plan.map((d) => d.items.map((i) => i.task.id).join(','));
+  // Mo aufhängen, Di abnehmen, Do wieder aufhängen, Fr abnehmen
+  assert.deepStrictEqual(ids, ['auf', 'ab', '', 'auf', 'ab']);
+});
+
+test('Folgeaufgabe: ohne Auslöser nie fällig, danach dringender als alles andere', () => {
+  const ab = mkTask('ab', 365, 10, null, { trigger: { afterTaskId: 'auf', delayDays: 1 }, dueOn: null });
+  assert.strictEqual(S.urgency(ab, MONDAY), 0);
+  assert.strictEqual(S.dueDay(ab), Infinity);
+  ab.dueOn = MONDAY;
+  const tasks = [mkTask('x', 7, 30, MONDAY - 20), ab];
+  // Auch am freien Sonntag (Budget 0) steht die Folgeaufgabe auf dem Plan.
+  const [sunday] = S.planDays(state(tasks), MONDAY + 6, 1);
+  assert.deepStrictEqual(sunday.items.map((i) => i.task.id), ['ab']);
+  const [monday] = S.planDays(state(tasks), MONDAY, 1);
+  assert.strictEqual(monday.items[0].task.id, 'ab');
+});

@@ -320,3 +320,9 @@ h2 { font-size: 1.05rem; margin: 1.4em 0 0.6em; }
 .pick-list { margin: 10px 0 4px; max-height: 50vh; overflow: auto; }
 .pick-row { cursor: pointer; box-shadow: none; background: var(--surface-2); }
 .modal .input[type="search"] { margin-top: 10px; }
+
+/* Folgeaufgaben */
+details.follow { background: var(--surface-2); border-radius: 12px; padding: 8px 12px; }
+details.follow summary { cursor: pointer; font-weight: 600; color: var(--text); }
+details.follow[open] { display: grid; gap: 8px; }
+details.follow p { margin: 0; }
