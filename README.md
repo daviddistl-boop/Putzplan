@@ -51,6 +51,8 @@ Im Ordner `android/` liegt eine native Android-App (Capacitor), die genau diese 
   Für die nächsten 30 Tage wird jeweils der Plan des Tages eingeplant; bei jedem Öffnen wird neu geplant.
 - **Installieren**: Unter *Releases* die neueste `Putzplan.apk` herunterladen, auf dem Handy öffnen und
   „Aus dieser Quelle installieren“ erlauben. Updates einfach drüberinstallieren.
+- **Updates**: Die App prüft selbst, ob es eine neue Version gibt, und zeigt dann „Update verfügbar“ an –
+  ein Tipp lädt sie herunter, installiert wird über die alte Version, die Daten bleiben erhalten.
 
 ### Bauen
 

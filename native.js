@@ -183,6 +183,16 @@
     if (isNative && P.App) P.App.exitApp();
   }
 
+  /** Installierte Version, z. B. { version: '1.0.6', build: '6' }. */
+  async function appInfo() {
+    if (!isNative || !P.App) return null;
+    try {
+      return await P.App.getInfo();
+    } catch (e) {
+      return null;
+    }
+  }
+
   root.PutzplanNative = {
     isNative,
     saveBackup,
@@ -197,5 +207,6 @@
     shareExport,
     onBackButton,
     exitApp,
+    appInfo,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

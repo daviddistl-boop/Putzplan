@@ -848,6 +848,8 @@
       html += `<button class="btn primary block timer-btn" data-action="session-start">⏱️ Putz-Timer starten</button>`;
     }
 
+    html += updateBanner();
+
     if (!isStandalone() && !state.settings.installHintDismissed) {
       html += `<div class="hint"><span>📲</span><div class="grow"><strong>Putzplan als App installieren</strong><br>
         <span class="muted small">Mit Symbol auf dem Startbildschirm und täglicher Erinnerung.</span></div>
@@ -1043,6 +1045,7 @@
     const b = state.settings.minutesPerWeekday;
     return `
       <header class="page-head"><h1>Einstellungen</h1></header>
+      ${updateCard()}
       ${installCard()}
       ${reminderCard()}
       ${robotCard()}
@@ -1354,6 +1357,89 @@
         save(); closeModal(); render();
       };
     });
+  }
+
+  // ---------------------------------------------------------------- App-Updates (Android)
+  //
+  // Neue Versionen werden von GitHub Actions als Release veröffentlicht. Die App
+  // fragt höchstens alle paar Stunden nach, ob es eine neuere gibt, und lädt die
+  // APK auf Wunsch im Browser herunter – installiert wird sie über die alte,
+  // die Daten bleiben erhalten.
+
+  const RELEASES_API = 'https://api.github.com/repos/daviddistl-boop/Putzplan/releases/latest';
+  const APK_URL = 'https://github.com/daviddistl-boop/Putzplan/releases/latest/download/Putzplan.apk';
+  const UPDATE_KEY = 'putzplan.update';
+  const UPDATE_EVERY_MS = 6 * 3600 * 1000;
+
+  // Bleibt beim Zurücksetzen der Oberfläche (ui) erhalten.
+  const upd = { release: null, version: null, checking: false };
+
+  const buildOf = (tag) => parseInt(String(tag || '').split('.').pop(), 10) || 0;
+
+  /** Neuheiten aus dem Release-Text (Abschnitt „Neu in dieser Version“). */
+  function releaseNotes(body) {
+    const part = String(body || '').split(/#+\s*Neu in dieser Version/i)[1];
+    if (!part) return [];
+    return part.split('\n').map((l) => l.replace(/^[-*]\s*/, '').trim())
+      .filter((l) => l && !/^(Co-Authored-By|Claude-Session):/i.test(l)).slice(0, 8);
+  }
+
+  async function checkForUpdate(force) {
+    if (!Native.isNative || !Native.appInfo) return;
+    const info = await Native.appInfo();
+    if (!info) return;
+    upd.version = info.version;
+    const current = parseInt(info.build, 10) || buildOf(info.version);
+    let cached = null;
+    try { cached = JSON.parse(localStorage.getItem(UPDATE_KEY) || 'null'); } catch (e) { /* ignorieren */ }
+    let release = cached && cached.release;
+    if (force || !cached || Date.now() - cached.at > UPDATE_EVERY_MS) {
+      upd.checking = true;
+      if (force) render();
+      try {
+        const res = await fetch(RELEASES_API, { headers: { Accept: 'application/vnd.github+json' } });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const asset = (data.assets || []).find((a) => /\.apk$/i.test(a.name));
+        release = { tag: data.tag_name, notes: releaseNotes(data.body), url: asset ? asset.browser_download_url : APK_URL };
+        try { localStorage.setItem(UPDATE_KEY, JSON.stringify({ at: Date.now(), release })); } catch (e) { /* ignorieren */ }
+      } catch (e) {
+        if (force) toast('Konnte nicht nach Updates suchen – bist du online?');
+      } finally {
+        upd.checking = false;
+      }
+    }
+    const before = upd.release && upd.release.tag;
+    upd.release = release && buildOf(release.tag) > current ? release : null;
+    if (force && !upd.release) toast(`Du hast die neueste Version (${info.version}) 👍`);
+    if (force || (upd.release && upd.release.tag) !== before) render();
+  }
+
+  function installUpdate() {
+    if (!upd.release) return;
+    toast('Download startet im Browser – danach die Datei öffnen und „Aktualisieren“ tippen.');
+    // Externe Adressen öffnet die Android-App im Browser, der die APK herunterlädt.
+    setTimeout(() => { window.location.href = upd.release.url; }, 600);
+  }
+
+  function updateBanner() {
+    if (!upd.release) return '';
+    return `<div class="hint update"><span>⬆️</span><div class="grow"><strong>Update ${esc(upd.release.tag.replace(/^v/, ''))} verfügbar</strong><br>
+        <span class="muted small">${upd.release.notes.length ? esc(upd.release.notes[0]) : 'Neue Version von Putzplan'}</span></div>
+        <button class="btn primary" data-action="update-install">Installieren</button></div>`;
+  }
+
+  function updateCard() {
+    if (!Native.isNative) return '';
+    const u = upd.release;
+    return `<section class="card">
+        <h2>⬆️ App-Version</h2>
+        <p class="small">Installiert: <strong>${esc(upd.version || '…')}</strong>${u ? ` · Neu: <strong>${esc(u.tag.replace(/^v/, ''))}</strong>` : ''}</p>
+        ${u && u.notes.length ? `<ul class="small notes">${u.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
+        ${u ? '<button class="btn primary block" data-action="update-install">Update herunterladen & installieren</button>'
+          : `<button class="btn block" data-action="update-check" ${upd.checking ? 'disabled' : ''}>${upd.checking ? 'Suche …' : 'Nach Updates suchen'}</button>`}
+        <p class="muted small">Updates werden einfach über die installierte App installiert – deine Daten bleiben erhalten.</p>
+      </section>`;
   }
 
   // ---------------------------------------------------------------- Saug- & Wischroboter
@@ -1748,6 +1834,8 @@
         }
         break;
       case 'dismiss-install': state.settings.installHintDismissed = true; save(); render(); break;
+      case 'update-install': installUpdate(); break;
+      case 'update-check': checkForUpdate(true); break;
       case 'robot-room': toggleRobotRoom(id); break;
       case 'session-start': startSessionDialog(); break;
       case 'session-toggle': sessionToggle(id); break;
@@ -1849,6 +1937,7 @@
       // Erinnerungen mit dem aktuellen Plan neu einplanen; Berechtigungen können sich geändert haben.
       Native.scheduleReminders(state, Shared, S);
       refreshNativeStatus();
+      checkForUpdate(false);
     }
   });
 
@@ -1869,6 +1958,7 @@
       });
       save();
       refreshNativeStatus();
+      checkForUpdate(false);
     } else if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
       navigator.serviceWorker.register('sw.js').then(resyncReminder).catch(() => {});
       syncToServiceWorker();

@@ -326,3 +326,7 @@ details.follow { background: var(--surface-2); border-radius: 12px; padding: 8px
 details.follow summary { cursor: pointer; font-weight: 600; color: var(--text); }
 details.follow[open] { display: grid; gap: 8px; }
 details.follow p { margin: 0; }
+
+/* Updates */
+.hint.update { background: color-mix(in srgb, var(--good) 14%, var(--surface)); }
+.notes { margin: 4px 0 8px; padding-left: 20px; }

@@ -85,6 +85,9 @@ jobs:
             Updates lassen sich einfach drüberinstallieren – deine Daten bleiben erhalten.
             ${{ env.SIGNING_NOTE }}
 
+            ## Neu in dieser Version
+            ${{ github.event.head_commit.message }}
+
       - name: APK zusätzlich auf den Branch "apk" legen
         run: |
           mkdir /tmp/apk && cp dist/Putzplan.apk /tmp/apk/
