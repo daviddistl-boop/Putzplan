@@ -187,3 +187,47 @@ test('Folgeaufgabe: ohne Auslöser nie fällig, danach dringender als alles ande
   const [monday] = S.planDays(state(tasks), MONDAY, 1);
   assert.strictEqual(monday.items[0].task.id, 'ab');
 });
+
+test('Allergiker-Modus: passende Aufgaben werden öfter fällig', () => {
+  const off = { allergy: { enabled: false, types: ['mites'] } };
+  const mites = { allergy: { enabled: true, types: ['mites'] } };
+  const bett = mkTask('b', 14, 15, MONDAY, { name: 'Bettwäsche wechseln' });
+  const sofa = mkTask('s', 30, 10, MONDAY, { name: 'Sofa absaugen' });
+  const matratze = mkTask('m', 90, 20, MONDAY, { name: 'Matratze absaugen & wenden' });
+  const fenster = mkTask('f', 60, 30, MONDAY, { name: 'Fenster putzen' });
+  assert.strictEqual(S.effectiveInterval(bett, off, MONDAY), 14);
+  assert.strictEqual(S.effectiveInterval(bett, mites, MONDAY), 7);
+  assert.strictEqual(S.effectiveInterval(sofa, mites, MONDAY), 8);
+  assert.strictEqual(S.effectiveInterval(matratze, mites, MONDAY), 31);
+  assert.strictEqual(S.effectiveInterval(fenster, mites, MONDAY), 60); // betrifft Milben nicht
+  assert.strictEqual(S.urgency(bett, MONDAY + 7, undefined, mites), 1);
+  assert.strictEqual(S.dueDay(bett, mites), MONDAY + 7);
+});
+
+test('Allergiker-Modus: Pollen nur in der Saison, stärkster Faktor gewinnt', () => {
+  const pollen = { allergy: { enabled: true, types: ['pollen', 'pets'] } };
+  const fenster = mkTask('f', 60, 30, 0, { name: 'Fenster putzen' });
+  const july = S.dateToDay(new Date(2026, 6, 1));
+  const nov = S.dateToDay(new Date(2026, 10, 1));
+  assert.strictEqual(S.effectiveInterval(fenster, pollen, july), 30);
+  assert.strictEqual(S.effectiveInterval(fenster, pollen, nov), 60);
+  const sofa = mkTask('s', 28, 10, 0, { name: 'Couch absaugen' });
+  assert.strictEqual(S.effectiveInterval(sofa, pollen, july), 7); // Tierhaare: ×0,25
+  const gitter = mkTask('g', 30, 10, nov - 40, { name: 'Pollenschutzgitter absaugen', season: 'pollen' });
+  assert.strictEqual(S.isPlannable(gitter, nov, pollen), false);
+  assert.strictEqual(S.isPlannable(gitter, july, pollen), true);
+});
+
+test('Allergiker-Modus wirkt auf den Wochenplan', () => {
+  const bett = mkTask('b', 14, 15, MONDAY - 7, { name: 'Bettwäsche wechseln' });
+  const base = state([bett]);
+  assert.strictEqual(S.planDays(base, MONDAY, 1)[0].items.length, 0);
+  base.settings.allergy = { enabled: true, types: ['mites'] };
+  assert.deepStrictEqual(S.planDays(base, MONDAY, 1)[0].items.map((i) => i.task.id), ['b']);
+});
+
+test('Allergiker-Zusatzaufgaben werden nicht doppelt verkürzt', () => {
+  const s = { allergy: { enabled: true, types: ['mites'] } };
+  const kissen = mkTask('k', 90, 20, MONDAY, { name: 'Kopfkissen & Bettdecke bei 60 °C waschen', allergyKey: 'mite-pillows' });
+  assert.strictEqual(S.effectiveInterval(kissen, s, MONDAY), 90);
+});

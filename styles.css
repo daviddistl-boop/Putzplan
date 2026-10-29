@@ -330,3 +330,7 @@ details.follow p { margin: 0; }
 /* Updates */
 .hint.update { background: color-mix(in srgb, var(--good) 14%, var(--surface)); }
 .notes { margin: 4px 0 8px; padding-left: 20px; }
+
+/* Allergiker-Modus */
+details.tips { margin-top: 8px; }
+details.tips ul { margin: 6px 0 0; padding-left: 20px; display: grid; gap: 4px; }

@@ -136,13 +136,14 @@
 
   function dueText(t) {
     if (t.paused) return 'Pausiert';
+    if (t.season === 'pollen' && !S.isPollenSeason(S.today())) return 'Ruht bis zur Pollensaison 🌼';
     if (t.trigger && (t.dueOn === null || t.dueOn === undefined)) {
       const parent = task(t.trigger.afterTaskId);
       return parent ? `Kommt nach „${parent.name}“` : 'Wartet';
     }
     const today = S.today();
     if (t.snoozedUntil && t.snoozedUntil > today) return `Verschoben auf ${dayLabel(t.snoozedUntil)}`;
-    const diff = S.dueDay(t) - today;
+    const diff = S.dueDay(t, state.settings) - today;
     if (diff < -1) return `Seit ${-diff} Tagen überfällig`;
     if (diff === -1) return 'Seit gestern überfällig';
     if (diff === 0) return 'Heute fällig';
@@ -397,7 +398,7 @@
     return state.tasks
       .filter((t) => !t.paused && !t.archived && !exclude.has(t.id) && !S.robotHandles(t, state.settings)
         && !(t.trigger && (t.dueOn === null || t.dueOn === undefined)))
-      .sort((a, b) => S.urgency(b, today) - S.urgency(a, today));
+      .sort((a, b) => S.urgency(b, today, undefined, state.settings) - S.urgency(a, today, undefined, state.settings));
   }
 
   /**
@@ -407,10 +408,10 @@
   function taskPicker({ title, intro, excludeIds, compareTo, extraButtons, onPick }) {
     const today = S.today();
     const all = pickCandidates(excludeIds);
-    const refU = compareTo ? S.urgency(compareTo, today) : null;
+    const refU = compareTo ? S.urgency(compareTo, today, undefined, state.settings) : null;
     const row = (t) => {
       const r = room(t.roomId);
-      const u = S.urgency(t, today);
+      const u = S.urgency(t, today, undefined, state.settings);
       const urgent = refU !== null && u > refU + 0.05;
       return `<li class="row pick-row" data-pick="${t.id}">
         <span class="room-icon">${r ? r.icon : '🧽'}</span>
@@ -823,8 +824,8 @@
     const plannedIds = new Set(plan.items.map((i) => i.task.id));
     const doneIds = new Set(doneEntries.map((h) => h.taskId));
     const extra = state.tasks
-      .filter((t) => S.isPlannable(t, today, state.settings) && !plannedIds.has(t.id) && !doneIds.has(t.id) && S.urgency(t, today) >= 1)
-      .sort((a, b) => S.urgency(b, today) - S.urgency(a, today));
+      .filter((t) => S.isPlannable(t, today, state.settings) && !plannedIds.has(t.id) && !doneIds.has(t.id) && S.urgency(t, today, undefined, state.settings) >= 1)
+      .sort((a, b) => S.urgency(b, today, undefined, state.settings) - S.urgency(a, today, undefined, state.settings));
 
     const doneMin = doneEntries.reduce((s, h) => s + h.minutes, 0);
     const openMin = plan.items.reduce((s, i) => s + S.estimate(i.task), 0);
@@ -890,14 +891,14 @@
   function taskRow(t, memberId, tag) {
     const r = room(t.roomId);
     const today = S.today();
-    const u = S.urgency(t, today);
-    const overdue = S.dueDay(t) < today;
+    const u = S.urgency(t, today, undefined, state.settings);
+    const overdue = S.dueDay(t, state.settings) < today;
     return `<li class="row">
       <button class="check" data-action="complete" data-id="${t.id}" data-member="${memberId || ''}" title="Erledigt"></button>
       <span class="room-icon">${r ? r.icon : '🧽'}</span>
       <div class="row-main" data-action="task-menu" data-id="${t.id}" data-member="${memberId || ''}">
         <div class="row-title">${esc(t.name)}</div>
-        <div class="row-sub">${r ? esc(r.name) : ''} · ${minutesLabel(t)}
+        <div class="row-sub">${r ? esc(r.name) : ''} · ${minutesLabel(t)}${allergyBoosted(t) || t.allergyKey ? ' · 🤧' : ''}
           ${overdue ? `<span class="badge bad">${dueText(t)}</span>` : ''}
           ${tag ? `<span class="badge">${tag}</span>` : ''}</div>
         <div class="dirt"><span style="width:${Math.min(100, u * 100)}%;background:${dirtColor(u)}"></span></div>
@@ -933,7 +934,7 @@
     const cards = state.rooms.map((r) => {
       const tasks = state.tasks.filter((t) => t.roomId === r.id && !t.archived);
       const pct = S.roomCleanliness(tasks, today, state.settings);
-      const due = tasks.filter((t) => S.isPlannable(t, today, state.settings) && S.urgency(t, today) >= 1).length;
+      const due = tasks.filter((t) => S.isPlannable(t, today, state.settings) && S.urgency(t, today, undefined, state.settings) >= 1).length;
       return `<button class="room-card" data-action="open-room" data-id="${r.id}">
         <span class="room-emoji">${r.icon}</span>
         <span class="room-name">${esc(r.name)}</span>
@@ -955,7 +956,7 @@
   function viewRoom(r) {
     const today = S.today();
     const tasks = state.tasks.filter((t) => t.roomId === r.id && !t.archived)
-      .sort((a, b) => S.dueDay(a) - S.dueDay(b));
+      .sort((a, b) => S.dueDay(a, state.settings) - S.dueDay(b, state.settings));
     const pct = S.roomCleanliness(tasks, today, state.settings);
     return `
       <header class="page-head">
@@ -966,7 +967,7 @@
         <p class="muted">${pct}% sauber</p>
       </header>
       <ul class="list">${tasks.map((t) => {
-        const u = S.urgency(t, today);
+        const u = S.urgency(t, today, undefined, state.settings);
         if (S.robotHandles(t, state.settings)) {
           return `<li class="row robot">
           <span class="check robot-check" aria-hidden="true">🤖</span>
@@ -976,12 +977,12 @@
           </div>
         </li>`;
         }
-        const overdue = !t.paused && S.dueDay(t) <= today;
+        const overdue = !t.paused && S.dueDay(t, state.settings) <= today;
         return `<li class="row ${t.paused ? 'paused' : ''}">
           <button class="check" data-action="complete" data-id="${t.id}" data-member="${t.assignee || ''}" title="Jetzt erledigt"></button>
           <div class="row-main" data-action="edit-task" data-id="${t.id}">
             <div class="row-title">${esc(t.name)}</div>
-            <div class="row-sub">${t.trigger ? '↪ Folgeaufgabe' : intervalLabel(t.interval)} · ${minutesLabel(t)} · <span class="${overdue ? 'bad-text' : ''}">${dueText(t)}</span></div>
+            <div class="row-sub">${intervalText(t)} · ${minutesLabel(t)} · <span class="${overdue ? 'bad-text' : ''}">${dueText(t)}</span></div>
             <div class="dirt"><span style="width:${Math.min(100, u * 100)}%;background:${dirtColor(u)}"></span></div>
           </div>
           ${avatar(member(t.assignee))}
@@ -1049,6 +1050,7 @@
       ${installCard()}
       ${reminderCard()}
       ${robotCard()}
+      ${allergyCard()}
       <section class="card">
         <h2>Zeitbudget pro Tag</h2>
         <p class="muted small">Wie viele Minuten möchtest du an welchem Tag putzen? Der Plan verteilt die Aufgaben automatisch. 0 = freier Tag.</p>
@@ -1114,6 +1116,10 @@
           <p><strong>🤖 Hast du einen Roboter?</strong><br><span class="muted small">Dann lassen wir Saugen bzw. Wischen weg.</span></p>
           <label class="switch-row"><span>Saugroboter</span><input type="checkbox" class="switch" data-onboard-robot="vacuum" ${ui.onboardRobot && ui.onboardRobot.vacuum ? 'checked' : ''}></label>
           <label class="switch-row"><span>Wischroboter</span><input type="checkbox" class="switch" data-onboard-robot="mop" ${ui.onboardRobot && ui.onboardRobot.mop ? 'checked' : ''}></label>
+        </div>
+        <div class="onboard-robot">
+          <p><strong>🤧 Allergien im Haushalt?</strong><br><span class="muted small">Dann planen wir Bettwäsche, Polster & Co. öfter ein.</span></p>
+          <div class="chip-grid">${T.ALLERGIES.map((x) => `<button class="chip ${(ui.onboardAllergy || []).includes(x.key) ? 'on' : ''}" data-action="onboard-allergy" data-key="${x.key}">${x.icon} ${x.name}</button>`).join('')}</div>
         </div>
         <button class="btn primary block" data-action="onboard-finish">Putzplan erstellen ✨</button>
       </div>`;
@@ -1440,6 +1446,100 @@
           : `<button class="btn block" data-action="update-check" ${upd.checking ? 'disabled' : ''}>${upd.checking ? 'Suche …' : 'Nach Updates suchen'}</button>`}
         <p class="muted small">Updates werden einfach über die installierte App installiert – deine Daten bleiben erhalten.</p>
       </section>`;
+  }
+
+  // ---------------------------------------------------------------- Allergiker-Modus
+
+  function allergy() {
+    if (!state.settings.allergy) state.settings.allergy = { enabled: false, types: [] };
+    return state.settings.allergy;
+  }
+
+  /** Raum für eine Zusatzaufgabe: erster passender Raum, sonst „Allgemein“, sonst ein neuer Raum. */
+  function roomForAllergyTask(prefs) {
+    const rooms = state.rooms.filter((r) => !r.robot);
+    for (const pref of prefs.concat(['Allgemein'])) {
+      const hit = rooms.find((r) => r.name.toLowerCase().includes(pref.toLowerCase()));
+      if (hit) return hit;
+    }
+    let r = state.rooms.find((x) => x.allergyRoom);
+    if (!r) {
+      r = { id: uid(), name: 'Allergie', icon: '🤧', allergyRoom: true };
+      state.rooms.push(r);
+    }
+    return r;
+  }
+
+  /** Legt Zusatzaufgaben für die gewählten Allergien an bzw. pausiert sie. */
+  function syncAllergyTasks() {
+    const a = allergy();
+    const today = S.today();
+    for (const [key, name, interval, minutes, type, prefs] of T.ALLERGY_TASKS) {
+      const on = a.enabled && a.types.includes(type);
+      const existing = state.tasks.find((t) => t.allergyKey === key);
+      if (existing) existing.paused = !on;
+      else if (on) {
+        state.tasks.push({
+          id: uid(), roomId: roomForAllergyTask(prefs).id, name, interval, minutes, allergyKey: key,
+          season: type === 'pollen' ? 'pollen' : undefined,
+          lastDone: today - Math.ceil(interval / 2), assignee: null, paused: false, snoozedUntil: null,
+        });
+      }
+    }
+  }
+
+  /** Aufgabe wird wegen einer Allergie öfter fällig? */
+  function allergyBoosted(t) {
+    return S.effectiveInterval(t, state.settings) < t.interval;
+  }
+
+  function intervalText(t) {
+    if (t.trigger) return '↪ Folgeaufgabe';
+    const eff = S.effectiveInterval(t, state.settings);
+    return eff < t.interval ? `🤧 ${intervalLabel(eff)}` : intervalLabel(t.interval);
+  }
+
+  function allergyCard() {
+    const a = allergy();
+    const today = S.today();
+    const boosted = a.enabled ? state.tasks.filter((t) => !t.paused && !t.archived && allergyBoosted(t)) : [];
+    const extra = state.tasks.filter((t) => t.allergyKey && !t.paused).length;
+    const pollenNote = a.types.includes('pollen')
+      ? `<p class="small">🌼 Pollensaison ${S.isPollenSeason(today) ? '<strong>läuft</strong> – Pollen-Aufgaben sind aktiv.' : 'ist vorbei – Pollen-Aufgaben ruhen bis Februar.'}</p>` : '';
+    return `<section class="card">
+        <h2>🤧 Allergiker-Modus</h2>
+        <p class="muted small">Für Allergiker werden Bettwäsche, Polster, Couch, Saugen & Co. öfter eingeplant,
+          und passende Zusatzaufgaben kommen dazu.</p>
+        <label class="switch-row"><span>Allergiker-Modus</span>
+          <input type="checkbox" class="switch" data-allergy-toggle ${a.enabled ? 'checked' : ''}></label>
+        ${a.enabled ? `
+          <p class="small muted">Wogegen bist du allergisch?</p>
+          <div class="chip-grid">${T.ALLERGIES.map((x) => `<button class="chip ${a.types.includes(x.key) ? 'on' : ''}" data-action="allergy-type" data-key="${x.key}">${x.icon} ${x.name}</button>`).join('')}</div>
+          ${pollenNote}
+          ${a.types.length ? `<p class="small">✨ <strong>${boosted.length}</strong> Aufgabe${boosted.length === 1 ? ' wird' : 'n werden'} öfter fällig (🤧),
+            <strong>${extra}</strong> Zusatzaufgabe${extra === 1 ? '' : 'n'}.</p>
+          ${a.types.map((type) => {
+            const info = T.ALLERGIES.find((x) => x.key === type);
+            return `<details class="follow tips"><summary>${info.icon} Tipps bei ${info.name}</summary>
+              <ul class="small">${T.ALLERGY_TIPS[type].map((tip) => `<li>${esc(tip)}</li>`).join('')}</ul></details>`;
+          }).join('')}
+          <p class="muted small">Allgemeine Tipps – sie ersetzen keine ärztliche Beratung.</p>` : '<p class="small muted">Wähle mindestens eine Allergie aus.</p>'}` : ''}
+      </section>`;
+  }
+
+  function setAllergy(changes) {
+    Object.assign(allergy(), changes);
+    syncAllergyTasks();
+    save();
+    render();
+  }
+
+  function toggleAllergyType(key) {
+    const a = allergy();
+    const types = a.types.includes(key) ? a.types.filter((t) => t !== key) : a.types.concat(key);
+    setAllergy({ types });
+    const info = T.ALLERGIES.find((x) => x.key === key);
+    if (types.includes(key)) toast(`${info.icon} ${info.name}: Plan angepasst`);
   }
 
   // ---------------------------------------------------------------- Saug- & Wischroboter
@@ -1792,6 +1892,9 @@
     const rb = ui.onboardRobot || {};
     state.settings.robot = { vacuum: !!rb.vacuum, mop: !!rb.mop, excludedRooms: [] };
     syncRobotTasks();
+    const al = ui.onboardAllergy || [];
+    state.settings.allergy = { enabled: al.length > 0, types: al };
+    syncAllergyTasks();
     state.onboarded = true;
     ui = { tab: 'today', roomId: null, showMore: false };
     save();
@@ -1836,6 +1939,14 @@
       case 'dismiss-install': state.settings.installHintDismissed = true; save(); render(); break;
       case 'update-install': installUpdate(); break;
       case 'update-check': checkForUpdate(true); break;
+      case 'allergy-type': toggleAllergyType(el.dataset.key); break;
+      case 'onboard-allergy': {
+        const k = el.dataset.key;
+        const cur = ui.onboardAllergy || [];
+        ui.onboardAllergy = cur.includes(k) ? cur.filter((x) => x !== k) : cur.concat(k);
+        render();
+        break;
+      }
       case 'robot-room': toggleRobotRoom(id); break;
       case 'session-start': startSessionDialog(); break;
       case 'session-toggle': sessionToggle(id); break;
@@ -1899,6 +2010,7 @@
       toast('Zeitbudget gespeichert – der Plan wurde angepasst.');
     }
     if (t.dataset.robot) setRobot(t.dataset.robot, t.checked);
+    if (t.dataset.allergyToggle !== undefined) setAllergy({ enabled: t.checked });
     if (t.dataset.onboardRobot) {
       ui.onboardRobot = ui.onboardRobot || {};
       ui.onboardRobot[t.dataset.onboardRobot] = t.checked;

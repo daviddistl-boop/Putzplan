@@ -121,6 +121,56 @@
     ['station', 'Station & Schmutzwassertank reinigen', 14, 10, 'mop'],
   ];
 
+  // Allergiker-Modus: Allergien, Zusatzaufgaben und Tipps.
+  const ALLERGIES = [
+    { key: 'mites', name: 'Hausstaubmilben', icon: '🛏️' },
+    { key: 'pollen', name: 'Pollen', icon: '🌼', note: 'nur in der Pollensaison (Feb.–Sep.)' },
+    { key: 'pets', name: 'Tierhaare', icon: '🐾' },
+    { key: 'mold', name: 'Schimmel', icon: '🍄' },
+  ];
+
+  // [Schlüssel, Name, Intervall, Dauer, Allergie, bevorzugte Räume]
+  const ALLERGY_TASKS = [
+    ['mite-pillows', 'Kopfkissen & Bettdecke bei 60 °C waschen', 90, 20, 'mites', ['Schlafzimmer']],
+    ['mite-plush', 'Kuscheltiere waschen oder 24 h einfrieren', 30, 10, 'mites', ['Kinderzimmer', 'Schlafzimmer']],
+    ['mite-filter', 'Staubsauger-Filter (HEPA) prüfen & wechseln', 90, 5, 'mites', ['Allgemein']],
+    ['pollen-sills', 'Fensterbänke & Rahmen feucht abwischen', 7, 10, 'pollen', ['Wohnzimmer', 'Schlafzimmer']],
+    ['pollen-screen', 'Pollenschutzgitter absaugen', 30, 10, 'pollen', ['Schlafzimmer', 'Wohnzimmer']],
+    ['pollen-clothes', 'Getragene Kleidung aus dem Schlafzimmer räumen', 2, 3, 'pollen', ['Schlafzimmer']],
+    ['pets-lint', 'Fusselrolle über Sofa & Kissen', 3, 5, 'pets', ['Wohnzimmer']],
+    ['pets-bed', 'Tierdecken & Körbchen waschen', 7, 10, 'pets', ['Allgemein', 'Wohnzimmer']],
+    ['pets-brush', 'Haustier draußen bürsten', 7, 10, 'pets', ['Allgemein']],
+    ['mold-squeegee', 'Dusche nach dem Duschen abziehen', 1, 2, 'mold', ['Badezimmer']],
+    ['mold-check', 'Silikonfugen & Ecken auf Schimmel prüfen', 30, 5, 'mold', ['Badezimmer', 'Allgemein']],
+    ['mold-condensate', 'Kondenswasser an Fenstern abwischen', 2, 3, 'mold', ['Schlafzimmer', 'Allgemein']],
+    ['mold-machine', 'Waschmaschinen-Dichtung trocknen, Tür offen lassen', 7, 2, 'mold', ['Waschküche', 'Badezimmer']],
+  ];
+
+  const ALLERGY_TIPS = {
+    mites: [
+      'Bettwäsche, Kissen und Decken bei mindestens 60 °C waschen',
+      'Milbendichte Bezüge (Encasings) für Matratze, Kissen und Decke',
+      'Staubsauger mit HEPA-Filter nutzen, Staub feucht statt trocken wischen',
+      'Schlafzimmer eher kühl (ca. 18 °C) und trocken halten',
+    ],
+    pollen: [
+      'Abends Haare waschen und getragene Kleidung nicht im Schlafzimmer ablegen',
+      'Wäsche in der Pollensaison drinnen trocknen',
+      'In der Stadt eher früh morgens, auf dem Land eher abends lüften',
+      'Pollenschutzgitter an Schlafzimmerfenstern helfen',
+    ],
+    pets: [
+      'Haustiere möglichst aus dem Schlafzimmer fernhalten',
+      'Polster oft absaugen – glatte Böden sind leichter sauber zu halten als Teppich',
+      'Nach dem Streicheln Hände waschen',
+    ],
+    mold: [
+      'Stoß- statt Kipplüften, mehrmals täglich ein paar Minuten',
+      'Luftfeuchtigkeit möglichst unter 60 % halten (Hygrometer hilft)',
+      'Möbel mit etwas Abstand zu Außenwänden stellen',
+    ],
+  };
+
   const ROOM_ICONS = ['🤖', '🍳', '🛁', '🚽', '🛋️', '🛏️', '🧸', '💻', '🚪', '🧺', '🌿', '🏠', '🚗', '🐶', '🪴', '📚', '🍽️'];
 
   const INTERVALS = [
@@ -139,7 +189,7 @@
 
   const MEMBER_COLORS = ['#4f8cff', '#ff7a59', '#2fbf71', '#b06cff', '#f5b700', '#ff5c8a'];
 
-  const api = { ROOM_TEMPLATES, ROBOT_TASKS, ROOM_ICONS, INTERVALS, MEMBER_COLORS };
+  const api = { ROOM_TEMPLATES, ROBOT_TASKS, ALLERGIES, ALLERGY_TASKS, ALLERGY_TIPS, ROOM_ICONS, INTERVALS, MEMBER_COLORS };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Templates = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
