@@ -35,10 +35,6 @@
   }
 
   let state = load();
-  if (!state.settings.autoFollowUps) {
-    state.settings.autoFollowUps = true;
-    state.tasks.slice().forEach((t) => autoFollowUp(t));
-  }
   let ui = { tab: 'today', roomId: null, showMore: false };
 
   function save() {
@@ -1854,6 +1850,7 @@
         const data = JSON.parse(await input.files[0].text());
         if (!Array.isArray(data.tasks) || !Array.isArray(data.rooms)) throw new Error('Format');
         state = Object.assign(defaultState(), data);
+        migrate();
         save(); render();
         toast('Daten importiert ✅');
       } catch (e) {
@@ -1865,7 +1862,42 @@
 
   // ---------------------------------------------------------------- Rendering & Events
 
+  /**
+   * Bringt Daten älterer Versionen (oder aus einem Import) auf den aktuellen Stand.
+   * Läuft erst, wenn alle Funktionen der App bereitstehen.
+   */
+  function migrate() {
+    if (!state.settings) state.settings = defaultState().settings;
+    if (!state.settings.autoFollowUps) {
+      state.settings.autoFollowUps = true;
+      state.tasks.slice().forEach((t) => autoFollowUp(t));
+      if (state.onboarded) save();
+    }
+  }
+
+  // Sicherheitsnetz: Statt eines leeren Bildschirms eine Meldung mit Ausweg anzeigen.
+  function showError(e) {
+    console.error(e);
+    const view = document.getElementById('view');
+    if (!view) return;
+    view.innerHTML = `<div class="empty big"><div class="emoji">😵</div>
+      <p><strong>Da ist etwas schiefgelaufen.</strong><br>Deine Daten sind sicher gespeichert.</p>
+      <p class="small muted">${esc(e && e.message ? e.message : e)}</p>
+      <div class="btn-row">
+        <button class="btn" data-action="export">⬇︎ Daten sichern</button>
+        <button class="btn primary" data-action="reload">Neu laden</button>
+      </div></div>`;
+  }
+
   function render() {
+    try {
+      renderView();
+    } catch (e) {
+      showError(e);
+    }
+  }
+
+  function renderView() {
     const view = document.getElementById('view');
     const tabs = document.getElementById('tabs');
     if (!state.onboarded) {
@@ -1929,6 +1961,7 @@
       case 'add-member': editMember(null); break;
       case 'edit-member': editMember(id); break;
       case 'export': exportData(); break;
+      case 'reload': location.reload(); break;
       case 'import': importData(); break;
       case 'install':
         if (installPrompt) {
@@ -2054,13 +2087,17 @@
   });
 
   async function start() {
+    migrate();
     // Ein Timer von gestern ist abgelaufen – offene Aufgaben sind heute ohnehin wieder fällig.
     if (state.session && state.session.day !== S.today()) state.session = null;
     if (Native.isNative) {
       // Falls localStorage leer ist (z. B. nach dem Löschen des Browser-Speichers), aus der Sicherung wiederherstellen.
       if (!state.onboarded) {
         const backup = await Native.loadBackup();
-        if (backup && backup.onboarded) state = Object.assign(defaultState(), backup);
+        if (backup && backup.onboarded) {
+          state = Object.assign(defaultState(), backup);
+          migrate();
+        }
       }
       Native.onBackButton(() => {
         if (document.querySelector('#modal-root .modal')) closeModal();
@@ -2078,5 +2115,5 @@
     render();
   }
 
-  start();
+  start().catch(showError);
 })();
