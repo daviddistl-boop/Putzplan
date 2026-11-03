@@ -43,6 +43,14 @@
    * (task.trigger = { afterTaskId, delayDays }, task.dueOn = Fälligkeitstag oder null).
    * Ab dem Fälligkeitstag sind sie dringender als alles andere.
    */
+  /**
+   * Aufgaben mit festem Fälligkeitstag statt Intervall: Folgeaufgaben und Pflanzenpflege
+   * (task.plantId – der Tag wird aus dem Pflanzen-Modul berechnet).
+   */
+  function hasDueDate(task) {
+    return !!(task.trigger || task.plantId);
+  }
+
   function followUpUrgency(dueOn, day) {
     if (dueOn === null || dueOn === undefined || day < dueOn) return 0;
     return 2 + (day - dueOn);
@@ -94,7 +102,7 @@
   /** Wirksames Intervall: im Allergiker-Modus ggf. verkürzt. */
   function effectiveInterval(task, settings, day) {
     // Folgeaufgaben und die Allergiker-Zusatzaufgaben selbst haben schon das passende Intervall.
-    if (task.trigger || task.allergyKey) return task.interval;
+    if (hasDueDate(task) || task.allergyKey) return task.interval;
     const types = activeAllergies(settings, day === undefined ? today() : day);
     if (!types.length) return task.interval;
     const cat = careCategory(task);
@@ -104,14 +112,14 @@
   }
 
   function urgency(task, day, lastDone, settings) {
-    if (task.trigger) return followUpUrgency(task.dueOn, day);
+    if (hasDueDate(task)) return followUpUrgency(task.dueOn, day);
     const last = lastDone !== undefined ? lastDone : task.lastDone;
     if (last === null || last === undefined) return 1;
     return Math.max(0, (day - last) / Math.max(1, effectiveInterval(task, settings, day)));
   }
 
   function dueDay(task, settings) {
-    if (task.trigger) return task.dueOn === null || task.dueOn === undefined ? Infinity : task.dueOn;
+    if (hasDueDate(task)) return task.dueOn === null || task.dueOn === undefined ? Infinity : task.dueOn;
     if (task.lastDone === null || task.lastDone === undefined) return today();
     return task.lastDone + effectiveInterval(task, settings);
   }
@@ -143,8 +151,14 @@
   }
 
   /** Aufgabe soll an diesem Tag von Hand eingeplant werden. */
+  /** Zählt Pflanzenpflege zum Putzplan (Budget, Timer)? Standard: ja. */
+  function plantsInPlan(settings) {
+    return !(settings && settings.plants && settings.plants.inPlan === false);
+  }
+
   function isPlannable(task, day, settings) {
     if (task.season === 'pollen' && !isPollenSeason(day)) return false;
+    if (task.plantId && !plantsInPlan(settings)) return false;
     return isActive(task, day) && !robotHandles(task, settings);
   }
 
@@ -225,7 +239,7 @@
     const done = new Set(doneToday || []);
     const sim = new Map(tasks.map((t) => [t.id, t.lastDone]));
     // Fälligkeit der Folgeaufgaben in der Simulation – und wer wen auslöst.
-    const simDue = new Map(tasks.filter((t) => t.trigger).map((t) => [t.id, t.dueOn]));
+    const simDue = new Map(tasks.filter(hasDueDate).map((t) => [t.id, t.dueOn]));
     const followUps = new Map();
     for (const t of tasks) {
       if (!t.trigger) continue;
@@ -247,8 +261,8 @@
 
       const eligible = tasks.filter((t) => isPlannable(t, day, settings) && !(i === 0 && done.has(t.id)));
       const scored = eligible
-        .map((t) => ({ task: t, u: t.trigger ? followUpUrgency(simDue.get(t.id), day) : urgency(t, day, sim.get(t.id), settings) }))
-        .filter((e) => !e.task.trigger || e.u > 0)
+        .map((t) => ({ task: t, u: hasDueDate(t) ? followUpUrgency(simDue.get(t.id), day) : urgency(t, day, sim.get(t.id), settings) }))
+        .filter((e) => !hasDueDate(e.task) || e.u > 0)
         .sort((a, b) => b.u - a.u || effectiveInterval(a.task, settings, day) - effectiveInterval(b.task, settings, day));
 
       let used = 0;
@@ -262,14 +276,16 @@
         used += estimate(entry.task);
         sim.set(entry.task.id, day);
         if (entry.task.trigger) simDue.set(entry.task.id, null);
+        else if (entry.task.plantId) simDue.set(entry.task.id, day + Math.max(1, entry.task.interval || 1));
         for (const f of followUps.get(entry.task.id) || []) simDue.set(f.id, day + (f.trigger.delayDays || 0));
       };
 
-      // 0. Fällige Folgeaufgaben kommen immer dran – auch an freien Tagen (die Wäsche muss ab).
-      for (const e of scored) if (e.task.trigger) take(e);
+      // 0. Fällige Folgeaufgaben und Pflanzenpflege kommen immer dran – auch an freien Tagen
+      //    (die Wäsche muss ab, eine durstige Pflanze kann nicht warten).
+      for (const e of scored) if (hasDueDate(e.task)) take(e);
       // 1. Fällige Aufgaben nach Dringlichkeit.
       for (const e of scored) {
-        if (e.task.trigger) continue;
+        if (hasDueDate(e.task)) continue;
         if (e.u < 1) break;
         // Tägliche Aufgaben passen immer rein – sie wären sonst sofort wieder fällig.
         if (budget <= 0) break;
@@ -277,7 +293,7 @@
       }
       // 2. Freie Zeit mit bald fälligen Aufgaben füllen.
       for (const e of scored) {
-        if (e.task.trigger || e.u >= 1 || e.u < PREFILL_THRESHOLD) continue;
+        if (hasDueDate(e.task) || e.u >= 1 || e.u < PREFILL_THRESHOLD) continue;
         if (effectiveInterval(e.task, settings, day) < 3) continue; // Kurze Intervalle lohnen sich nicht vorzuziehen.
         if (used + estimate(e.task) <= budget) take(e);
       }
@@ -287,9 +303,9 @@
     return plan;
   }
 
-  /** Sauberkeit eines Raums in Prozent (100 = alles frisch geputzt). Roboter-Aufgaben zählen nicht mit. */
+  /** Sauberkeit eines Raums in Prozent (100 = alles frisch geputzt). Roboter- und Pflanzenaufgaben zählen nicht mit. */
   function roomCleanliness(tasks, day, settings) {
-    const active = tasks.filter((t) => !t.paused && !robotHandles(t, settings));
+    const active = tasks.filter((t) => !t.paused && !t.plantId && !robotHandles(t, settings));
     if (!active.length) return 100;
     const sum = active.reduce((s, t) => s + Math.min(1, urgency(t, day, undefined, settings)), 0);
     return Math.round((1 - sum / active.length) * 100);
@@ -303,6 +319,8 @@
     urgency,
     dueDay,
     isActive,
+    hasDueDate,
+    plantsInPlan,
     careCategory,
     isPollenSeason,
     activeAllergies,

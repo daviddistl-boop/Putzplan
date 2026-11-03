@@ -3,7 +3,7 @@ importScripts('scheduler.js', 'shared.js');
 
 const CACHE = 'putzplan-v4';
 const ASSETS = [
-  './', 'index.html', 'styles.css', 'app.js', 'scheduler.js', 'templates.js', 'shared.js', 'planta.js', 'native.js', 'manifest.webmanifest',
+  './', 'index.html', 'styles.css', 'app.js', 'scheduler.js', 'plants.js', 'templates.js', 'shared.js', 'native.js', 'manifest.webmanifest',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png',
 ];
 

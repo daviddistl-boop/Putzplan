@@ -335,6 +335,32 @@ details.follow p { margin: 0; }
 details.tips { margin-top: 8px; }
 details.tips ul { margin: 6px 0 0; padding-left: 20px; display: grid; gap: 4px; }
 
-/* Planta */
-.row-note { font-size: 0.8rem; color: var(--muted); margin-top: 2px; }
-.note .link { display: inline; padding: 0; }
+/* Pflanzen */
+.row-note { font-size: 0.8rem; color: var(--muted); margin: 2px 0; }
+.room-icon.plant-thumb { width: 30px; height: 30px; border-radius: 50%; object-fit: cover; flex: none; }
+.plant-row { align-items: flex-start; }
+.plant-photo-sm {
+  flex: none; width: 56px; height: 56px; border-radius: 14px; object-fit: cover;
+  display: grid; place-items: center; font-size: 1.8rem; background: var(--surface-2);
+}
+.care-chips { margin-top: 6px; }
+.care-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.btn.small-btn { padding: 6px 12px; font-size: 0.85rem; }
+.weather-line { margin: 0 0 10px; }
+.hint.frost { margin: 12px 0; border-left: 4px solid var(--primary); }
+.plant-photo { display: flex; gap: 12px; align-items: center; }
+.plant-photo img, .plant-photo-empty {
+  flex: none; width: 96px; height: 96px; border-radius: 18px; object-fit: cover;
+  display: grid; place-items: center; font-size: 2.6rem; background: var(--surface-2);
+}
+.photo-btns { display: grid; gap: 6px; flex: 1; }
+.photo-btns .btn { color: var(--text); text-align: center; padding: 9px 12px; font-size: 0.9rem; cursor: pointer; }
+.field-label { font-size: 0.85rem; color: var(--muted); }
+.form .chip-grid { margin: 6px 0 0; }
+.species-pick { margin: 0; }
+.species-pick .link { margin-left: 6px; }
+.ident-list button { line-height: 1.35; }
+.ident-list button.on { outline: 2px solid var(--good); }
+.inline-form { display: flex; gap: 8px; align-items: center; }
+.inline-form .input { flex: 1; margin: 0; }
+.loc-list { margin-top: 10px; }
