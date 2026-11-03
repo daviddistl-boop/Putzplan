@@ -83,6 +83,8 @@ Prüfe außerdem unter *Authentication* → *Sign In / Providers* → *Email*, d
 
 ### In der App
 
-Die **Web-Client-ID** (endet auf `.apps.googleusercontent.com`) ist nicht geheim. Sie kommt in `shared.js`
-(`GOOGLE_WEB_CLIENT_ID`). Schick sie mir, dann trage ich sie ein. Bis dahin zeigt der Google-Knopf
-„wird gerade eingerichtet“, die Anmeldung per E-Mail funktioniert schon.
+Die **Web-Client-ID** (endet auf `.apps.googleusercontent.com`) ist nicht geheim. Sie steht in `shared.js`
+(`GOOGLE_WEB_CLIENT_ID`) und ist eingetragen.
+
+Der SHA-1-Fingerabdruck des aktuellen Release-Schlüssels (aus der APK ausgelesen, Zertifikat „CN=Putzplan“):
+`68:0E:AD:36:60:5E:84:8A:D8:29:9F:07:64:1A:E7:7A:7C:17:02:22`

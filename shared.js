@@ -10,7 +10,7 @@
   const SUPABASE_URL = 'https://nqopgnogbuidqtfwpsat.supabase.co';
   const SUPABASE_KEY = 'sb_publishable_h9vDlRql-3T1gqvmiZbf9A_19rLtjG2';
   // Web-Client-ID aus der Google Cloud Console (öffentlich). Leer = Google-Anmeldung noch nicht eingerichtet.
-  const GOOGLE_WEB_CLIENT_ID = '';
+  const GOOGLE_WEB_CLIENT_ID = '462887745840-dvvl62cu8l2ji34o4fag6ib26kphtkte.apps.googleusercontent.com';
   // Adresse der Supabase Edge Function für Push-Erinnerungen.
   const PUSH_API = `${SUPABASE_URL}/functions/v1/push`;
   // Pflanzenerkennung per Foto (Edge Function, fragt mit geheimem Schlüssel bei Pl@ntNet an).
