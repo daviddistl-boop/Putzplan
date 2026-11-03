@@ -3,7 +3,7 @@ name: Android-App bauen
 on:
   push:
     branches: [main, ccr-e78ad8cb-nzqwpn]
-    paths-ignore: ['**.md', 'supabase/**']
+    paths-ignore: ['**.md', 'supabase/**', '.claude/**']
   workflow_dispatch:
 
 permissions:
