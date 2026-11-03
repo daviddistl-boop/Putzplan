@@ -334,7 +334,3 @@ details.follow p { margin: 0; }
 /* Allergiker-Modus */
 details.tips { margin-top: 8px; }
 details.tips ul { margin: 6px 0 0; padding-left: 20px; display: grid; gap: 4px; }
-
-/* Planta */
-.row-note { font-size: 0.8rem; color: var(--muted); margin-top: 2px; }
-.note .link { display: inline; padding: 0; }

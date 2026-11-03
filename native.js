@@ -183,27 +183,6 @@
     if (isNative && P.App) P.App.exitApp();
   }
 
-  // ------------------------------------------------------------ Planta-Verbindung
-  // Eigenes Android-Plugin (PlantaBridgePlugin.java): liest nur Benachrichtigungen der Planta-App.
-
-  const plantaPlugin = isNative && Cap.registerPlugin ? Cap.registerPlugin('PlantaBridge') : null;
-
-  const planta = {
-    available: !!plantaPlugin,
-    async status() {
-      try { return await plantaPlugin.status(); } catch (e) { return { enabled: false, error: true }; }
-    },
-    openSettings: () => plantaPlugin.openSettings().catch(() => {}),
-    openAppInfo: () => plantaPlugin.openAppInfo().catch(() => {}),
-    async pending() {
-      try { return (await plantaPlugin.getPending()).items || []; } catch (e) { return []; }
-    },
-    clear: (items) => plantaPlugin.clear({ keys: items.map((i) => `${i.id}|${i.postedAt}`) }).catch(() => {}),
-    onNew(handler) {
-      if (plantaPlugin && plantaPlugin.addListener) plantaPlugin.addListener('plantaNotification', handler);
-    },
-  };
-
   /** Installierte Version, z. B. { version: '1.0.6', build: '6' }. */
   async function appInfo() {
     if (!isNative || !P.App) return null;
@@ -229,6 +208,5 @@
     onBackButton,
     exitApp,
     appInfo,
-    planta,
   };
 })(typeof window !== 'undefined' ? window : globalThis);
