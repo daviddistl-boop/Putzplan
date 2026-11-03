@@ -17,6 +17,8 @@ verteilt die Arbeit nach deinem Zeitbudget auf die Woche und sagt dir jeden Tag,
   (wird automatisch eingerichtet; für jede Aufgabe im Bearbeiten-Dialog frei festlegbar).
 - **Allergiker-Modus** – Hausstaubmilben, Pollen (nur in der Saison), Tierhaare oder Schimmel auswählen:
   Bettwäsche, Polster, Couch, Saugen & Co. werden öfter fällig (🤧), passende Zusatzaufgaben und Tipps kommen dazu.
+- **Planta-Verbindung (Android)** – erinnert Planta ans Gießen, Düngen oder Umtopfen, steht das automatisch
+  im Putzplan. Dazu liest die App (nach Erlaubnis unter „Benachrichtigungszugriff“) nur Planta-Benachrichtigungen mit.
 - **Automatischer Wochenplan** – Aufgaben werden nach Dringlichkeit auf die nächsten 7 Tage verteilt.
   Ist ein Tag voll, rutscht der Rest auf den nächsten Tag; bleibt Zeit übrig, werden bald fällige Aufgaben vorgezogen.
 - **Zeitbudget pro Wochentag** – z. B. 20 Min. unter der Woche, 1 Std. am Samstag, Sonntag frei.
@@ -119,6 +121,7 @@ wiederkehrende Aufgaben im Wochenplan korrekt erneut auftauchen. Die Logik steck
 | `scheduler.js` | Planungslogik (Fälligkeit, Wochenplan, Verteilung auf Personen) |
 | `templates.js` | Raum- und Aufgabenvorlagen |
 | `styles.css` | Design inkl. Dark Mode |
+| `planta.js` | Erkennt in Planta-Benachrichtigungen die anstehende Pflanzenpflege |
 | `native.js` | Anbindung an die Android-App (lokale Erinnerungen, Sicherung, Teilen) |
 | `android/`, `capacitor.config.json` | Android-Projekt |
 | `shared.js` | Von App und Service Worker gemeinsam genutzt (IndexedDB, Erinnerungstext) |

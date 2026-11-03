@@ -133,6 +133,7 @@
   function dueText(t) {
     if (t.paused) return 'Pausiert';
     if (t.season === 'pollen' && !S.isPollenSeason(S.today())) return 'Ruht bis zur Pollensaison 🌼';
+    if (t.trigger && t.trigger.external === 'planta' && (t.dueOn === null || t.dueOn === undefined)) return 'Wartet auf Planta 🪴';
     if (t.trigger && (t.dueOn === null || t.dueOn === undefined)) {
       const parent = task(t.trigger.afterTaskId);
       return parent ? `Kommt nach „${parent.name}“` : 'Wartet';
@@ -897,6 +898,7 @@
         <div class="row-sub">${r ? esc(r.name) : ''} · ${minutesLabel(t)}${allergyBoosted(t) || t.allergyKey ? ' · 🤧' : ''}
           ${overdue ? `<span class="badge bad">${dueText(t)}</span>` : ''}
           ${tag ? `<span class="badge">${tag}</span>` : ''}</div>
+        ${t.plantaNotes && t.plantaNotes.length ? `<div class="row-note">🪴 ${esc(t.plantaNotes.join(' · '))}</div>` : ''}
         <div class="dirt"><span style="width:${Math.min(100, u * 100)}%;background:${dirtColor(u)}"></span></div>
       </div>
       ${avatar(member(memberId))}
@@ -1043,6 +1045,7 @@
     return `
       <header class="page-head"><h1>Einstellungen</h1></header>
       ${updateCard()}
+      ${plantaCard()}
       ${installCard()}
       ${reminderCard()}
       ${robotCard()}
@@ -1187,7 +1190,9 @@
       <form id="task-form" class="form">
         <label>Was ist zu tun?<input class="input" name="name" required value="${esc(t.name)}" placeholder="z. B. Fenster putzen"></label>
         <label>Raum<select class="input" name="roomId">${state.rooms.map((r) => `<option value="${r.id}" ${r.id === t.roomId ? 'selected' : ''}>${r.icon} ${esc(r.name)}</option>`).join('')}</select></label>
-        ${t.trigger ? `
+        ${t.trigger && t.trigger.external ? `
+        <input type="hidden" name="intervalPreset" value="${t.interval}">
+        <p class="small learned">🪴 Wird fällig, wenn Planta daran erinnert.</p>` : t.trigger ? `
         <input type="hidden" name="intervalPreset" value="${t.interval}">
         <p class="small learned">↪ Folgeaufgabe von „${esc((task(t.trigger.afterTaskId) || { name: '?' }).name)}“ – wird fällig, sobald diese erledigt ist.</p>
         <label>Fällig<select class="input" name="delay">${DELAY_LABELS.map((l, i) => `<option value="${i}" ${i === t.trigger.delayDays ? 'selected' : ''}>${l}</option>`).join('')}</select></label>` : `
@@ -1444,6 +1449,132 @@
       </section>`;
   }
 
+  // ---------------------------------------------------------------- Planta-Verbindung (Android)
+  //
+  // Planta erinnert ans Gießen, Düngen usw. Die Android-App liest (mit Erlaubnis) nur die
+  // Benachrichtigungen der Planta-App mit. Daraus werden Aufgaben, die – wie Folgeaufgaben –
+  // genau dann fällig sind, wenn Planta erinnert hat. Abhaken in Putzplan wirkt nicht in Planta.
+
+  const plantaUi = { status: null, last: [] };
+  const P = window.Planta;
+
+  function plantaSettings() {
+    if (!state.settings.planta) state.settings.planta = { enabled: false };
+    return state.settings.planta;
+  }
+
+  // Eigene Gieß-Aufgaben aus den Vorlagen – würden sich sonst mit Planta doppeln.
+  const isOwnWatering = (t) => !t.trigger && /pflanz.*gie(ß|ss)|gie(ß|ss).*pflanz/i.test(t.name);
+
+  function plantaRoom() {
+    let r = state.rooms.find((x) => x.plantaRoom);
+    if (!r) {
+      r = { id: uid(), name: 'Pflanzen', icon: '🪴', plantaRoom: true };
+      state.rooms.push(r);
+    }
+    return r;
+  }
+
+  function plantaTask(action) {
+    let t = state.tasks.find((x) => x.plantaKey === action.key);
+    if (!t) {
+      t = {
+        id: uid(), roomId: plantaRoom().id, name: action.name, interval: 7, minutes: action.minutes,
+        lastDone: null, assignee: null, paused: false, snoozedUntil: null,
+        trigger: { external: 'planta' }, dueOn: null, plantaKey: action.key, plantaNotes: [],
+      };
+      state.tasks.push(t);
+    }
+    return t;
+  }
+
+  function setPlantaEnabled(on) {
+    plantaSettings().enabled = on;
+    // Doppelte Gieß-Aufgaben pausieren bzw. wieder aktivieren.
+    for (const t of state.tasks) {
+      if (on && isOwnWatering(t) && !t.paused) { t.paused = true; t.pausedByPlanta = true; }
+      if (!on && t.pausedByPlanta) { t.paused = false; delete t.pausedByPlanta; }
+      if (t.plantaKey) t.paused = !on;
+    }
+    save();
+    render();
+    if (on) syncPlanta();
+  }
+
+  /** Verarbeitet Planta-Benachrichtigungen: macht die passende Aufgabe heute fällig. */
+  function handlePlantaItems(items) {
+    const today = S.today();
+    const added = [];
+    for (const item of items) {
+      plantaUi.last.unshift({ title: item.title, text: item.text, at: item.postedAt });
+      const action = P.parse(item.title, item.text);
+      if (!action) continue;
+      const t = plantaTask(action);
+      t.paused = false;
+      const day = Math.min(today, S.dateToDay(new Date(item.postedAt || Date.now())));
+      if (t.dueOn === null || t.dueOn === undefined) {
+        t.dueOn = day;
+        t.plantaNotes = [];
+      } else {
+        t.dueOn = Math.min(t.dueOn, day);
+      }
+      if (action.note && !t.plantaNotes.includes(action.note)) t.plantaNotes = t.plantaNotes.concat(action.note).slice(-3);
+      if (!added.includes(t.name)) added.push(t.name);
+    }
+    plantaUi.last = plantaUi.last.slice(0, 5);
+    if (added.length) {
+      save();
+      toast(`🪴 Von Planta: ${added.join(', ')}`);
+    }
+    render();
+  }
+
+  async function syncPlanta() {
+    if (!Native.planta || !Native.planta.available) return;
+    plantaUi.status = await Native.planta.status();
+    if (!plantaSettings().enabled) {
+      if (ui.tab === 'settings') render();
+      return;
+    }
+    const items = await Native.planta.pending();
+    if (items.length) {
+      handlePlantaItems(items);
+      await Native.planta.clear(items);
+    } else if (ui.tab === 'settings') {
+      render();
+    }
+  }
+
+  function plantaCard() {
+    const p = plantaSettings();
+    if (!Native.planta || !Native.planta.available) {
+      return `<section class="card"><h2>🪴 Planta-Verbindung</h2>
+        <p class="muted small">Nur in der Android-App verfügbar.</p></section>`;
+    }
+    const st = plantaUi.status || {};
+    const access = st.enabled;
+    const tasks = state.tasks.filter((t) => t.plantaKey);
+    return `<section class="card">
+        <h2>🪴 Planta-Verbindung</h2>
+        <p class="muted small">Wenn Planta dich ans Gießen, Düngen oder Umtopfen erinnert, steht das automatisch
+          auch in deinem Putzplan. Putzplan liest dafür nur die Benachrichtigungen der Planta-App mit – keine anderen.</p>
+        <label class="switch-row"><span>Mit Planta verbinden</span>
+          <input type="checkbox" class="switch" data-planta-toggle ${p.enabled ? 'checked' : ''}></label>
+        ${p.enabled ? `
+          <p class="small">${access ? '✅ Benachrichtigungszugriff ist erlaubt.' : '⚠️ Putzplan braucht noch den <strong>Benachrichtigungszugriff</strong>.'}</p>
+          ${access ? '' : `
+            <button class="btn primary block" data-action="planta-access">Benachrichtigungszugriff erlauben</button>
+            <p class="note">Ist der Schalter dort ausgegraut („Eingeschränkte Einstellung“)? Das ist bei Apps außerhalb des Play Stores normal:
+              Öffne die <button class="link" data-action="planta-appinfo">App-Infos von Putzplan</button>, tippe oben rechts auf ⋮ →
+              <strong>„Eingeschränkte Einstellungen zulassen“</strong> und versuche es dann erneut.</p>`}
+          <p class="small muted">Deine eigenen Gieß-Aufgaben sind pausiert, damit nichts doppelt kommt. Abhaken in Putzplan hakt nicht in Planta ab.</p>
+          ${tasks.length ? `<ul class="mini-list">${tasks.map((t) => `<li><span class="grow">${esc(t.name)}</span><small class="muted">${esc(dueText(t))}</small></li>`).join('')}</ul>` : ''}
+          ${plantaUi.last.length ? `<details class="follow tips"><summary>Zuletzt von Planta empfangen</summary>
+            <ul class="small">${plantaUi.last.map((n) => `<li>${esc(n.title)}${n.text ? ` – ${esc(n.text)}` : ''}</li>`).join('')}</ul></details>` : ''}
+          <button class="btn block" data-action="planta-test">Testen: Gieß-Erinnerung simulieren</button>` : ''}
+      </section>`;
+  }
+
   // ---------------------------------------------------------------- Allergiker-Modus
 
   function allergy() {
@@ -1490,6 +1621,7 @@
   }
 
   function intervalText(t) {
+    if (t.trigger && t.trigger.external === 'planta') return '🪴 von Planta';
     if (t.trigger) return '↪ Folgeaufgabe';
     const eff = S.effectiveInterval(t, state.settings);
     return eff < t.interval ? `🤧 ${intervalLabel(eff)}` : intervalLabel(t.interval);
@@ -1970,6 +2102,11 @@
         }
         break;
       case 'dismiss-install': state.settings.installHintDismissed = true; save(); render(); break;
+      case 'planta-access': Native.planta.openSettings(); break;
+      case 'planta-appinfo': Native.planta.openAppInfo(); break;
+      case 'planta-test':
+        handlePlantaItems([{ id: 'test', postedAt: Date.now(), title: 'Zeit zum Gießen 💧', text: 'Test: Deine Monstera braucht Wasser' }]);
+        break;
       case 'update-install': installUpdate(); break;
       case 'update-check': checkForUpdate(true); break;
       case 'allergy-type': toggleAllergyType(el.dataset.key); break;
@@ -2043,6 +2180,7 @@
       toast('Zeitbudget gespeichert – der Plan wurde angepasst.');
     }
     if (t.dataset.robot) setRobot(t.dataset.robot, t.checked);
+    if (t.dataset.plantaToggle !== undefined) setPlantaEnabled(t.checked);
     if (t.dataset.allergyToggle !== undefined) setAllergy({ enabled: t.checked });
     if (t.dataset.onboardRobot) {
       ui.onboardRobot = ui.onboardRobot || {};
@@ -2083,6 +2221,7 @@
       Native.scheduleReminders(state, Shared, S);
       refreshNativeStatus();
       checkForUpdate(false);
+      syncPlanta();
     }
   });
 
@@ -2108,6 +2247,8 @@
       save();
       refreshNativeStatus();
       checkForUpdate(false);
+      if (Native.planta && Native.planta.available) Native.planta.onNew(() => syncPlanta());
+      syncPlanta();
     } else if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
       navigator.serviceWorker.register('sw.js').then(resyncReminder).catch(() => {});
       syncToServiceWorker();
