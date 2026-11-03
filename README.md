@@ -25,6 +25,12 @@ verteilt die Arbeit nach deinem Zeitbudget auf die Woche und sagt dir jeden Tag,
   zusätzlich von oben gießen. Draußen: kein Gießen nach Regen (ab 5 mm), früher bei über 28 °C, Frost-Hinweis
   unter 2 °C (Wetter von Open-Meteo, Ort in den Einstellungen). Art per Foto erkennen (Pl@ntNet).
   Pflanzenpflege zählt zum Zeitbudget, steht im Putz-Timer und bringt Punkte – oder als eigener Block unter „Heute“.
+- **Konto & gemeinsamer Haushalt** (freiwillig) – Anmeldung per E-Mail-Code oder Google. Mit Konto ist der Putzplan
+  gesichert und wird zwischen den Handys aller Mitglieder abgeglichen, auch offline (Abgleich beim nächsten Netz)
+  und live. Einladen per 6-stelligem Code, mehrere Haushalte (z. B. Wohnung und Ferienhaus), Mitglieder ohne
+  eigenes Handy bleiben möglich. Haken zwei Personen dieselbe Aufgabe am selben Tag ab, zählt das erste Abhaken.
+  Konto löschen direkt in der App. Einrichtung des Mail-Versands und der Google-Anmeldung:
+  [`docs/einrichtung-konten.md`](docs/einrichtung-konten.md).
 - **Automatischer Wochenplan** – Aufgaben werden nach Dringlichkeit auf die nächsten 7 Tage verteilt.
   Ist ein Tag voll, rutscht der Rest auf den nächsten Tag; bleibt Zeit übrig, werden bald fällige Aufgaben vorgezogen.
 - **Zeitbudget pro Wochentag** – z. B. 20 Min. unter der Woche, 1 Std. am Samstag, Sonntag frei.
@@ -116,6 +122,19 @@ Einrichten: Auf my.plantnet.org kostenlos registrieren, den API-Schlüssel kopie
 (Projekt „Putzplan“ → *Edge Functions → Secrets*) als `PLANTNET_API_KEY` speichern. Ohne Schlüssel meldet die
 App „Foto-Erkennung noch nicht eingerichtet“, alles andere funktioniert normal.
 
+## Konten & Abgleich – so funktioniert's
+
+Ohne Konto bleibt alles wie bisher im Speicher des Geräts. Mit Konto gehört jeder Putzplan zu einem
+**Haushalt** in Supabase (Tabellen `households`, `household_members`, `household_invites`, `records`;
+Zugriffsregeln und Funktionen in `supabase/migrations/20261103000000_households.sql`).
+
+- Der Zustand eines Haushalts wird in einzelne Datensätze zerlegt (jeder Raum, jede Aufgabe, jede Pflanze,
+  jedes Mitglied, jeder Verlaufseintrag, die gemeinsamen Einstellungen). Hochgeladen wird nur, was sich
+  geändert hat; Änderungen anderer kommen live (Supabase Realtime) oder beim nächsten Öffnen.
+- Je Datensatz gilt die zuletzt gespeicherte Fassung. Persönliches (laufender Timer, Erinnerungszeit,
+  „Pflanzen im Putzplan mitzählen“) bleibt auf dem Gerät.
+- Die Abgleich-Regeln stehen in `sync.js` (mit Tests), die Netzwerk-Aufrufe in `cloud.js`.
+
 ## Tests
 
 ```bash
@@ -139,6 +158,9 @@ immer dran, auch wenn das Zeitbudget voll ist. Den Tag der Pflanzenpflege berech
 | `index.html` | Grundgerüst der App |
 | `app.js` | Oberfläche, Datenhaltung (localStorage), Dialoge |
 | `scheduler.js` | Planungslogik (Fälligkeit, Wochenplan, Verteilung auf Personen) |
+| `sync.js`, `cloud.js` | Abgleich zwischen Geräten (Regeln) und Anbindung an Supabase (Konto, Haushalte) |
+| `vendor/supabase.js` | Supabase-Client (supabase-js 2.118.0, MIT-Lizenz) |
+| `docs/einrichtung-konten.md` | Anleitung: Mail-Versand (Resend) und Google-Anmeldung einrichten |
 | `plants.js` | Pflanzen: Steckbriefe, Gieß-Berechnung, Wetter, Lernen aus der Rückmeldung |
 | `templates.js` | Raum- und Aufgabenvorlagen |
 | `styles.css` | Design inkl. Dark Mode |

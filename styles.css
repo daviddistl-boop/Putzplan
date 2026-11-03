@@ -364,3 +364,20 @@ details.tips ul { margin: 6px 0 0; padding-left: 20px; display: grid; gap: 4px; 
 .inline-form { display: flex; gap: 8px; align-items: center; }
 .inline-form .input { flex: 1; margin: 0; }
 .loc-list { margin-top: 10px; }
+
+/* Konto & Haushalte */
+.household-chip {
+  display: inline-flex; align-items: center; gap: 6px; margin: 0 0 10px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--text);
+  border-radius: 99px; padding: 6px 14px; font-weight: 600; font-size: 0.9rem;
+}
+.google-btn { display: flex; align-items: center; justify-content: center; gap: 10px; background: var(--surface); border: 1px solid var(--line); color: var(--text); }
+.or { text-align: center; color: var(--muted); font-size: 0.85rem; margin: 4px 0; }
+.code-input { font-size: 1.6rem; letter-spacing: 0.3em; text-align: center; font-variant-numeric: tabular-nums; }
+.invite-code { font-size: 2.4rem; font-weight: 800; letter-spacing: 0.15em; text-align: center; margin: 16px 0 8px; font-variant-numeric: tabular-nums; }
+.center-link { display: block; margin: 14px auto 0; text-align: center; }
+.team-card { padding: 4px; }
+.team-card .row { width: 100%; border: 0; text-align: left; color: var(--text); background: var(--surface); font: inherit; cursor: pointer; }
+.account-row { margin: 6px 0; }
+.menu button.on { outline: 2px solid var(--primary); }
+.menu .avatar { margin-right: 6px; vertical-align: middle; }

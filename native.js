@@ -170,6 +170,11 @@
 
   // ------------------------------------------------------------ Export & Zurück-Taste
 
+  /** Text über das Android-Teilen-Menü verschicken (z. B. eine Einladung). */
+  async function shareText(text) {
+    await P.Share.share({ text, dialogTitle: 'Einladung teilen' });
+  }
+
   async function shareExport(filename, json) {
     const file = await P.Filesystem.writeFile({ path: filename, directory: 'CACHE', encoding: 'utf8', data: json });
     await P.Share.share({ title: 'Putzplan-Sicherung', files: [file.uri], dialogTitle: 'Sicherung speichern oder senden' });
@@ -205,6 +210,7 @@
     scheduleTimerEnd,
     cancelTimerEnd,
     shareExport,
+    shareText,
     onBackButton,
     exitApp,
     appInfo,
