@@ -7,7 +7,12 @@
   const P = window.Plants;
   const Shared = window.PutzplanShared;
   const Native = window.PutzplanNative || { isNative: false };
+  const SyncL = window.PutzplanSync;
+  const Cloud = window.PutzplanCloud;
   const STORAGE_KEY = 'putzplan.v1';
+  const ACTIVE_KEY = 'putzplan.active';
+  const HOUSEHOLDS_KEY = 'putzplan.households';
+  const DEVICE_KEY = 'putzplan.device';
   const WEEKDAYS = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
   const WEEKDAYS_SHORT = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 
@@ -26,9 +31,26 @@
     };
   }
 
-  function load() {
+  function lsGet(key) {
+    try { return localStorage.getItem(key); } catch (e) { return null; }
+  }
+  function lsSet(key, value) {
+    try { localStorage.setItem(key, value); } catch (e) { /* Speicher voll oder gesperrt */ }
+  }
+
+  // Jeder Haushalt hat seinen eigenen Speicherplatz; „local“ = ohne Konto (wie bisher).
+  const stateKey = (id) => (id === 'local' ? STORAGE_KEY : `putzplan.hh.${id}`);
+  let activeId = lsGet(ACTIVE_KEY) || 'local';
+  // Kennung dieses Geräts – damit doppeltes Abhaken auf zwei Handys erkannt wird.
+  const deviceId = lsGet(DEVICE_KEY) || (() => {
+    const d = Math.random().toString(36).slice(2, 10);
+    lsSet(DEVICE_KEY, d);
+    return d;
+  })();
+
+  function load(id) {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
+      const raw = localStorage.getItem(stateKey(id === undefined ? activeId : id));
       if (raw) return Object.assign(defaultState(), JSON.parse(raw));
     } catch (e) {
       console.warn('Konnte Daten nicht laden', e);
@@ -39,17 +61,24 @@
   let state = load();
   let ui = { tab: 'today', roomId: null, showMore: false };
 
-  function save() {
+  /** Nur auf dem Gerät speichern (ohne Abgleich anzustoßen). */
+  function persist() {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      localStorage.setItem(stateKey(activeId), JSON.stringify(state));
     } catch (e) {
       toast('Speichern fehlgeschlagen – ist der Speicher voll?');
     }
     syncToServiceWorker();
     if (Native.isNative) {
-      Native.saveBackup(state);
+      // Haushalte mit Konto sind auf dem Server gesichert, ohne Konto sichert die App eine Datei.
+      if (activeId === 'local') Native.saveBackup(state);
       Native.scheduleReminders(state, Shared, S);
     }
+  }
+
+  function save() {
+    persist();
+    scheduleSync();
   }
 
   // Kopie für den Service Worker, damit die Erinnerung die heutigen Aufgaben kennt.
@@ -192,8 +221,8 @@
     const o = opts || {};
     const day = S.today();
     const entry = {
-      id: uid(), taskId, day, memberId: memberId || (state.members[0] && state.members[0].id) || null,
-      minutes: S.estimate(t), prevLastDone: t.lastDone, prevSnoozed: t.snoozedUntil || null,
+      id: uid(), taskId, day, memberId: memberId || myMemberId() || (state.members[0] && state.members[0].id) || null,
+      minutes: S.estimate(t), prevLastDone: t.lastDone, prevSnoozed: t.snoozedUntil || null, at: Date.now(), dev: deviceId,
     };
     if (o.actualMs !== undefined) {
       // Mit dem Timer gemessen: Dauer merken und daraus lernen.
@@ -228,7 +257,7 @@
 
   function skipTask(taskId) {
     const t = task(taskId);
-    const entry = { id: uid(), taskId, day: S.today(), memberId: null, minutes: 0, skipped: true, prevLastDone: t.lastDone, prevSnoozed: t.snoozedUntil || null };
+    const entry = { id: uid(), taskId, day: S.today(), memberId: null, minutes: 0, skipped: true, prevLastDone: t.lastDone, prevSnoozed: t.snoozedUntil || null, at: Date.now(), dev: deviceId };
     if (t.trigger) { entry.prevDueOn = t.dueOn ?? null; t.dueOn = null; }
     state.history.push(entry);
     t.lastDone = S.today();
@@ -847,6 +876,7 @@
     const greet = hour < 11 ? 'Guten Morgen' : hour < 18 ? 'Hallo' : 'Guten Abend';
 
     let html = `
+      ${householdChip()}
       <header class="hero">
         <div>
           <p class="muted">${WEEKDAYS[S.weekday(today)]}, ${d.toLocaleDateString('de-DE', { day: 'numeric', month: 'long' })}</p>
@@ -861,6 +891,7 @@
     }
 
     html += updateBanner();
+    html += accountHint();
     html += frostHint();
 
     if (!isStandalone() && !state.settings.installHintDismissed) {
@@ -1032,7 +1063,7 @@
     const recent = real.slice(-15).reverse();
 
     return `
-      <header class="page-head"><h1>Team & Statistik</h1></header>
+      <header class="page-head"><button class="link" data-action="go" data-tab="settings">‹ Mehr</button><h1>Team & Statistik</h1></header>
       <div class="stat-grid">
         <div class="stat"><strong>${streakDays()}</strong><span>Tage Serie 🔥</span></div>
         <div class="stat"><strong>${week.length}</strong><span>Aufgaben diese Woche</span></div>
@@ -1061,8 +1092,14 @@
   function viewSettings() {
     const b = state.settings.minutesPerWeekday;
     return `
-      <header class="page-head"><h1>Einstellungen</h1></header>
+      <header class="page-head"><h1>Mehr</h1></header>
       ${updateCard()}
+      ${accountCard()}
+      ${householdCard()}
+      <section class="card team-card">
+        <button class="row" data-action="go" data-tab="team"><span class="room-icon">🏆</span>
+          <div class="row-main"><div class="row-title">Team & Statistik</div><div class="row-sub">Rangliste, Punkte, Serie und Verlauf</div></div><span class="muted">›</span></button>
+      </section>
       ${installCard()}
       ${reminderCard()}
       ${plantsCard()}
@@ -1075,19 +1112,21 @@
           <label><span>${w}</span><input type="number" min="0" max="600" step="5" value="${b[i]}" data-budget="${i}"></label>`).join('')}</div>
       </section>
       <section class="card">
-        <h2>Haushalt</h2>
-        <ul class="list">${state.members.map((m) => `<li class="row" data-action="edit-member" data-id="${m.id}">${avatar(m, 'lg')}<div class="row-main"><div class="row-title">${esc(m.name)}</div>
+        <h2>Mitglieder</h2>
+        <p class="muted small">Wer im Haushalt putzt – auch Personen ohne eigenes Handy, z. B. Kinder.${cloud.user ? ' 🔗 = mit Konto verknüpft.' : ''}</p>
+        <ul class="list">${state.members.map((m) => `<li class="row" data-action="edit-member" data-id="${m.id}">${avatar(m, 'lg')}<div class="row-main"><div class="row-title">${esc(m.name)}${m.userId ? ' 🔗' : ''}</div>
           <div class="row-sub">${(m.offDays || []).length ? 'Frei: ' + m.offDays.map((d) => WEEKDAYS_SHORT[d]).join(', ') : 'Jeden Tag verfügbar'}</div></div><span class="muted">›</span></li>`).join('')}</ul>
         <button class="btn block" data-action="add-member">＋ Person hinzufügen</button>
       </section>
       <section class="card">
         <h2>Daten</h2>
-        <p class="muted small">Alle Daten bleiben auf diesem Gerät. Exportiere sie als Backup oder um sie auf ein anderes Gerät zu übertragen.</p>
+        <p class="muted small">${isCloudHousehold() ? 'Dein Haushalt ist in deinem Konto gesichert. Zusätzlich kannst du ihn als Datei exportieren.'
+          : 'Alle Daten bleiben auf diesem Gerät. Exportiere sie als Backup oder um sie auf ein anderes Gerät zu übertragen.'}</p>
         <div class="btn-row">
           <button class="btn" data-action="export">⬇︎ Exportieren</button>
           <button class="btn" data-action="import">⬆︎ Importieren</button>
         </div>
-        <button class="btn danger block" data-action="reset">Alles zurücksetzen</button>
+        ${isCloudHousehold() ? '' : '<button class="btn danger block" data-action="reset">Alles zurücksetzen</button>'}
       </section>
       <p class="muted small center">Putzplan · funktioniert offline · als App installierbar</p>`;
   }
@@ -1099,16 +1138,31 @@
       ui.onboardRooms = sel;
       return `
         <div class="onboard">
-          <div class="emoji big-emoji">🧹</div>
-          <h1>Willkommen bei Putzplan</h1>
+          <div class="emoji big-emoji">${ui.newHousehold ? '🏡' : '🧹'}</div>
+          <h1>${ui.newHousehold ? 'Neuen Haushalt einrichten' : 'Willkommen bei Putzplan'}</h1>
           <p class="muted">Welche Räume hat dein Zuhause? Wir legen passende Aufgaben mit sinnvollen Intervallen an – anpassen kannst du alles später.</p>
           <div class="chip-grid">${T.ROOM_TEMPLATES.map((r) => `
             <button class="chip ${sel.has(r.key) ? 'on' : ''}" data-action="toggle-template" data-key="${r.key}">${r.icon} ${r.name}</button>`).join('')}</div>
           <button class="btn primary block" data-action="onboard-next" ${sel.size ? '' : 'disabled'}>Weiter</button>
+          ${!cloud.user && !ui.newHousehold && Cloud && Cloud.available() ? '<button class="link center-link" data-action="onboard-welcome-login">Schon ein Konto? Anmelden</button>' : ''}
+          ${!ui.newHousehold && Cloud && Cloud.available() ? '<button class="link center-link" data-action="onboard-join">Einladung bekommen? Mit Code beitreten</button>' : ''}
+        </div>`;
+    }
+    if (step === 4) {
+      return `
+        <div class="onboard">
+          <div class="emoji big-emoji">☁️</div>
+          <h1>Konto anlegen?</h1>
+          <p class="muted">Mit einem Konto ist dein Putzplan gesichert, und du kannst ihn mit deinem Haushalt teilen –
+            jede Person auf ihrem eigenen Handy. Kein Passwort nötig.</p>
+          <button class="btn primary block" data-action="onboard-login">Konto anlegen (E-Mail oder Google)</button>
+          <button class="btn block" data-action="onboard-finish">Ohne Konto weiter</button>
+          <p class="small muted">Ohne Konto liegen deine Daten nur auf diesem Handy. Wenn du die App löschst,
+            das Handy verlierst oder wechselst, sind sie weg.</p>
         </div>`;
     }
     if (step === 2) {
-      const names = ui.onboardMembers || [''];
+      const names = ui.onboardMembers || [cloud.user ? userName() : ''];
       ui.onboardMembers = names;
       return `
         <div class="onboard">
@@ -1138,7 +1192,7 @@
           <p><strong>🤧 Allergien im Haushalt?</strong><br><span class="muted small">Dann planen wir Bettwäsche, Polster & Co. öfter ein.</span></p>
           <div class="chip-grid">${T.ALLERGIES.map((x) => `<button class="chip ${(ui.onboardAllergy || []).includes(x.key) ? 'on' : ''}" data-action="onboard-allergy" data-key="${x.key}">${x.icon} ${x.name}</button>`).join('')}</div>
         </div>
-        <button class="btn primary block" data-action="onboard-finish">Putzplan erstellen ✨</button>
+        <button class="btn primary block" data-action="${!cloud.user && !ui.newHousehold && Cloud && Cloud.available() ? 'onboard-next' : 'onboard-finish'}">Putzplan erstellen ✨</button>
       </div>`;
   }
 
@@ -1469,6 +1523,706 @@
       </section>`;
   }
 
+  // ---------------------------------------------------------------- Konto & Haushalte
+  //
+  // Ohne Konto bleibt alles auf dem Handy (Haushalt „local“). Mit Konto gehören die Daten zu
+  // einem oder mehreren Haushalten auf dem Server und werden zwischen den Geräten abgeglichen
+  // (Regeln in sync.js). Persönliches wie Timer oder Erinnerungszeit bleibt auf dem Gerät.
+
+  const cloud = {
+    user: null,
+    households: [],   // [{ id, name, icon, role, memberId }]
+    members: [],      // Mitgliedschaften des aktiven Haushalts (Konten)
+    status: 'idle',   // idle | syncing | ok | offline
+    lastSync: null,
+    unsubscribe: null,
+  };
+  const HOUSEHOLD_ICONS = ['🏠', '🏡', '🏢', '🏖️', '🏔️', '🌲', '🛖', '🏰'];
+  let syncTimer = null;
+  let syncing = false;
+  let syncAgain = false;
+  let pendingRender = false;
+
+  try { cloud.households = JSON.parse(lsGet(HOUSEHOLDS_KEY) || '[]'); } catch (e) { cloud.households = []; }
+
+  const isCloudHousehold = () => activeId !== 'local';
+
+  /** Server-Aktion mit Fehlermeldung in Klartext. */
+  async function cloudTask(fn) {
+    ui.cloudBusy = true;
+    try {
+      await fn();
+    } catch (e) {
+      console.warn(e);
+      toast(Cloud.friendly(e));
+    } finally {
+      ui.cloudBusy = false;
+      render();
+    }
+  }
+  const activeHousehold = () => cloud.households.find((h) => h.id === activeId) || null;
+  const metaKey = (id) => `putzplan.sync.${id}`;
+
+  function userName() {
+    const u = cloud.user;
+    if (!u) return '';
+    const md = u.user_metadata || {};
+    return md.name || md.full_name || (u.email || '').split('@')[0];
+  }
+
+  /** Mein Mitglied im Team des aktiven Haushalts. */
+  function myMemberId() {
+    if (!cloud.user) return null;
+    const linked = state.members.find((m) => m.userId === cloud.user.id);
+    if (linked) return linked.id;
+    const h = activeHousehold();
+    return h && h.memberId && member(h.memberId) ? h.memberId : null;
+  }
+
+  function loadMeta(id) {
+    try {
+      const m = JSON.parse(lsGet(metaKey(id)) || 'null');
+      if (m && m.shadow) return m;
+    } catch (e) { /* neu anfangen */ }
+    return { shadow: {}, cursor: null };
+  }
+
+  function saveMeta(id, meta) {
+    lsSet(metaKey(id), JSON.stringify(meta));
+  }
+
+  function scheduleSync(delay) {
+    if (!isCloudHousehold() || !cloud.user) return;
+    clearTimeout(syncTimer);
+    syncTimer = setTimeout(syncNow, delay === undefined ? 1200 : delay);
+  }
+
+  /** Neu zeichnen – aber nicht, während jemand in der Ansicht tippt. */
+  function softRender() {
+    const a = document.activeElement;
+    if (a && a.closest && a.closest('#view') && /INPUT|TEXTAREA|SELECT/.test(a.tagName)) { pendingRender = true; return; }
+    pendingRender = false;
+    render();
+  }
+
+  /** Abgleich: erst Änderungen holen und einführen, dann eigene Änderungen hochladen. */
+  async function syncNow() {
+    if (!isCloudHousehold() || !cloud.user) return;
+    if (syncing) { syncAgain = true; return; }
+    syncing = true;
+    const hid = activeId;
+    const before = cloud.status;
+    cloud.status = 'syncing';
+    try {
+      const meta = loadMeta(hid);
+      const rows = await Cloud.pull(hid, meta.cursor);
+      if (hid !== activeId) return;
+      let changed = false;
+      if (rows.length) {
+        const docs = SyncL.stateToDocs(state);
+        const res = SyncL.applyRemote(docs, meta.shadow, rows);
+        if (res.cursor) meta.cursor = res.cursor;
+        if (res.changed) {
+          state = SyncL.docsToState(docs, state);
+          if (state.rooms.length || state.tasks.length || state.members.length) state.onboarded = true;
+          changed = true;
+        }
+      }
+      // Dieselbe Aufgabe auf zwei Handys abgehakt: das erste Abhaken zählt.
+      const removed = SyncL.dedupeCompletions(state.history);
+      for (const h of removed) {
+        if (h.dev !== deviceId) continue;
+        const first = state.history.find((x) => x.taskId === h.taskId && x.day === h.day && !x.skipped);
+        const who = first && member(first.memberId);
+        const t = task(h.taskId);
+        toast(`${t ? `„${t.name}“` : 'Die Aufgabe'} war schon erledigt${who ? ` von ${who.name}` : ''} ✓`);
+      }
+      if (changed || removed.length) {
+        migrate();
+        syncPlants();
+        persist();
+      }
+      const docs = SyncL.stateToDocs(state);
+      const changes = SyncL.diff(meta.shadow, docs);
+      const out = SyncL.toRows(changes);
+      if (out.length) {
+        await Cloud.push(hid, out);
+        for (const u of changes.upserts) meta.shadow[u.key] = u.json;
+        for (const d of changes.deletes) meta.shadow[d.key] = null;
+      }
+      saveMeta(hid, meta);
+      cloud.status = 'ok';
+      cloud.lastSync = Date.now();
+      if (changed || removed.length || before !== 'ok') softRender();
+    } catch (e) {
+      console.warn('Abgleich fehlgeschlagen', e);
+      cloud.status = 'offline';
+      if (before !== 'offline') softRender();
+      // Später nochmal versuchen.
+      clearTimeout(syncTimer);
+      syncTimer = setTimeout(syncNow, 30000);
+    } finally {
+      syncing = false;
+      if (syncAgain) { syncAgain = false; scheduleSync(300); }
+    }
+  }
+
+  function subscribeActive() {
+    if (cloud.unsubscribe) { cloud.unsubscribe(); cloud.unsubscribe = null; }
+    if (!isCloudHousehold() || !cloud.user) return;
+    try {
+      cloud.unsubscribe = Cloud.subscribe(activeId, (what) => {
+        if (what === 'members') refreshMembers();
+        else scheduleSync(400);
+      });
+    } catch (e) { /* ohne Live-Abgleich weiter – beim Öffnen wird abgeglichen */ }
+  }
+
+  async function refreshHouseholds() {
+    if (!cloud.user) return;
+    try {
+      cloud.households = await Cloud.households(cloud.user.id);
+      lsSet(HOUSEHOLDS_KEY, JSON.stringify(cloud.households));
+    } catch (e) { /* offline: zwischengespeicherte Liste */ }
+  }
+
+  async function refreshMembers() {
+    if (!isCloudHousehold() || !cloud.user) return;
+    try {
+      cloud.members = await Cloud.members(activeId);
+      softRender();
+    } catch (e) { /* offline */ }
+  }
+
+  /** Zu einem anderen Haushalt wechseln (Daten des bisherigen bleiben auf dem Gerät). */
+  async function switchHousehold(id, opts) {
+    const o = opts || {};
+    if (id !== activeId) {
+      persist();
+      if (state.session) state.session = null;
+      activeId = id;
+      lsSet(ACTIVE_KEY, id);
+      state = load(id);
+      migrate();
+      cloud.members = [];
+      ui = { tab: o.tab || 'today', roomId: null, showMore: false };
+    }
+    subscribeActive();
+    render();
+    if (id !== 'local' && cloud.user) {
+      await syncNow();
+      refreshMembers();
+    }
+  }
+
+  /** Eigene Daten eines Haushalts vom Gerät entfernen (nach Verlassen, Abmelden …). */
+  function forgetHousehold(id) {
+    try {
+      localStorage.removeItem(stateKey(id));
+      localStorage.removeItem(metaKey(id));
+    } catch (e) { /* egal */ }
+    cloud.households = cloud.households.filter((h) => h.id !== id);
+    lsSet(HOUSEHOLDS_KEY, JSON.stringify(cloud.households));
+  }
+
+  /** Nach dem Verlassen/Löschen: in einen anderen Haushalt wechseln oder neu einrichten. */
+  async function afterHouseholdGone(id) {
+    forgetHousehold(id);
+    if (cloud.households.length) {
+      await switchHousehold(cloud.households[0].id);
+    } else {
+      activeId = 'local';
+      lsSet(ACTIVE_KEY, 'local');
+      state = defaultState();
+      ui = { tab: 'today', roomId: null, showMore: false };
+      subscribeActive();
+      render();
+    }
+  }
+
+  // ------------------------------------------------ Anmelden
+
+  const LOGIN_CONTEXT_KEY = 'putzplan.loginContext';
+
+  /** Anmelde-Dialog: E-Mail mit Code oder Google. `context` bestimmt, was danach passiert. */
+  function loginDialog(context) {
+    try { sessionStorage.setItem(LOGIN_CONTEXT_KEY, context || 'settings'); } catch (e) { /* egal */ }
+    if (!Cloud || !Cloud.available()) { toast('Keine Verbindung zum Server – bitte später nochmal versuchen.'); return; }
+    const step = { email: '', sent: false, busy: false, error: '' };
+    const draw = () => openModal(step.sent ? `
+      <h2>📬 Code eingeben</h2>
+      <p class="muted">Wir haben dir einen Code an <strong>${esc(step.email)}</strong> geschickt. Schau auch im Spam-Ordner nach.</p>
+      <div class="form">
+        <input class="input code-input" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="123456" data-code>
+        ${step.error ? `<p class="small bad-text">${esc(step.error)}</p>` : ''}
+        <button class="btn primary block" data-verify ${step.busy ? 'disabled' : ''}>${step.busy ? 'Prüfe …' : 'Anmelden'}</button>
+        <div class="btn-row"><button class="btn" data-back>‹ Andere E-Mail</button><button class="btn" data-resend>Code nochmal schicken</button></div>
+      </div>` : `
+      <h2>☁️ Anmelden oder Konto anlegen</h2>
+      <p class="muted">Mit einem Konto ist dein Putzplan gesichert und du kannst ihn mit anderen teilen. Kein Passwort nötig.</p>
+      <div class="form">
+        <button class="btn block google-btn" data-google>${GOOGLE_ICON} Mit Google anmelden</button>
+        <p class="or">oder mit E-Mail</p>
+        <input class="input" type="email" inputmode="email" autocomplete="email" placeholder="deine@email.de" data-email value="${esc(step.email)}">
+        ${step.error ? `<p class="small bad-text">${esc(step.error)}</p>` : ''}
+        <button class="btn primary block" data-send ${step.busy ? 'disabled' : ''}>${step.busy ? 'Sende …' : 'Code per E-Mail schicken'}</button>
+        <button class="btn block" data-cancel>Abbrechen</button>
+      </div>`, (el) => {
+      const run = async (fn) => {
+        step.busy = true; step.error = ''; draw();
+        try { await fn(); } catch (e) { step.error = Cloud.friendly(e); }
+        step.busy = false;
+        if (!step.done && document.querySelector('#modal-root .modal')) draw();
+      };
+      const send = () => run(async () => {
+        const email = (el.querySelector('[data-email]') || {}).value || step.email;
+        if (!/^\S+@\S+\.\S+$/.test(email.trim())) throw new Error('Bitte gib eine gültige E-Mail-Adresse ein.');
+        step.email = email.trim();
+        await Cloud.sendCode(step.email);
+        step.sent = true;
+      });
+      const g = el.querySelector('[data-google]');
+      if (g) g.onclick = () => {
+        if (!Cloud.googleReady()) { step.error = 'Die Google-Anmeldung wird gerade eingerichtet – bitte nimm vorerst die E-Mail.'; draw(); return; }
+        run(async () => {
+          const s = await Cloud.googleSignIn();
+          if (s) { step.done = true; closeModal(); signedIn(s.user); }
+        });
+      };
+      const sendBtn = el.querySelector('[data-send]');
+      if (sendBtn) sendBtn.onclick = send;
+      const emailInput = el.querySelector('[data-email]');
+      if (emailInput) {
+        emailInput.focus();
+        emailInput.onkeydown = (ev) => { if (ev.key === 'Enter') send(); };
+      }
+      const cancel = el.querySelector('[data-cancel]');
+      if (cancel) cancel.onclick = closeModal;
+      const verify = () => run(async () => {
+        const code = el.querySelector('[data-code]').value.replace(/\D/g, '');
+        if (code.length < 6) throw new Error('Der Code hat 6 Ziffern.');
+        const s = await Cloud.verifyCode(step.email, code);
+        // Ab hier übernimmt signedIn() (Name, Haushalt …) – der Anmelde-Dialog ist fertig.
+        step.done = true;
+        closeModal();
+        signedIn(s.user);
+      });
+      const v = el.querySelector('[data-verify]');
+      if (v) v.onclick = verify;
+      const codeInput = el.querySelector('[data-code]');
+      if (codeInput) {
+        codeInput.focus();
+        codeInput.oninput = () => { if (codeInput.value.replace(/\D/g, '').length === 6) verify(); };
+      }
+      const back = el.querySelector('[data-back]');
+      if (back) back.onclick = () => { step.sent = false; step.error = ''; draw(); };
+      const resend = el.querySelector('[data-resend]');
+      if (resend) resend.onclick = () => run(async () => { await Cloud.sendCode(step.email); toast('Neuer Code ist unterwegs 📬'); });
+    });
+    draw();
+  }
+
+  const GOOGLE_ICON = '<svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>';
+
+  let signingIn = false;
+
+  /**
+   * Nach dem Anmelden: Name sicherstellen, dann je nach Lage den bisherigen Putzplan ins
+   * Konto übernehmen, zu einem vorhandenen Haushalt wechseln oder die Einrichtung fortsetzen.
+   */
+  async function signedIn(user) {
+    if (signingIn) return;
+    signingIn = true;
+    let context = 'settings';
+    try { context = sessionStorage.getItem(LOGIN_CONTEXT_KEY) || 'settings'; sessionStorage.removeItem(LOGIN_CONTEXT_KEY); } catch (e) { /* egal */ }
+    try {
+      cloud.user = user;
+      await ensureName();
+      await refreshHouseholds();
+      if (activeId === 'local') {
+        const hasLocal = state.onboarded && (state.tasks.length || state.rooms.length);
+        if (context === 'join' && !hasLocal) {
+          render();
+          joinDialog();
+        } else if (context === 'onboarding-finish') {
+          await finishOnboarding();
+        } else if (hasLocal) {
+          await moveLocalToCloud();
+          if (context === 'join') joinDialog();
+        } else if (cloud.households.length) {
+          await switchHousehold(cloud.households[0].id);
+          toast(`Willkommen zurück, ${userName()}! 👋`);
+        } else {
+          render(); // Einrichtung fortsetzen – am Ende wird der Haushalt angelegt.
+        }
+      } else {
+        subscribeActive();
+        scheduleSync(0);
+        render();
+      }
+    } catch (e) {
+      toast(Cloud.friendly(e));
+    } finally {
+      signingIn = false;
+    }
+  }
+
+  /** Beim ersten Anmelden nach dem Namen fragen (Google liefert ihn meist mit). */
+  function ensureName() {
+    const md = (cloud.user && cloud.user.user_metadata) || {};
+    if (md.name) return Promise.resolve();
+    const suggestion = md.full_name || md.given_name || '';
+    return new Promise((resolve) => {
+      openModal(`
+        <h2>👋 Wie heißt du?</h2>
+        <p class="muted">So sehen dich die anderen in deinem Haushalt.</p>
+        <div class="form">
+          <input class="input" data-name maxlength="40" value="${esc(suggestion)}" placeholder="Vorname">
+          <button class="btn primary block" data-ok>Weiter</button>
+        </div>`, (el) => {
+        const input = el.querySelector('[data-name]');
+        input.focus();
+        el.querySelector('[data-ok]').onclick = async () => {
+          const name = input.value.trim();
+          if (!name) return;
+          closeModal();
+          try {
+            await Cloud.updateName(name);
+            cloud.user.user_metadata = Object.assign({}, cloud.user.user_metadata, { name });
+          } catch (e) { /* Name wird beim nächsten Mal gefragt */ }
+          resolve();
+        };
+      });
+      // Schließen über den Hintergrund: ohne Namen weiter.
+      const backdrop = document.querySelector('#modal-root [data-close]');
+      if (backdrop) backdrop.onclick = () => { closeModal(); resolve(); };
+    });
+  }
+
+  /** Auswahl „Wer bist du?“ unter den Mitgliedern ohne Konto. Löst mit einer Mitglieds-ID auf (null = neu). */
+  function whoAreYou(intro) {
+    const free = state.members.filter((m) => !m.userId);
+    if (!free.length) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      openModal(`
+        <h2>🙋 Wer bist du?</h2>
+        <p class="muted">${intro || 'Wähle deinen Namen – deine Punkte und Aufgaben bleiben dann erhalten.'}</p>
+        <div class="menu">
+          ${free.map((m) => `<button data-m="${m.id}">${avatar(m)} ${esc(m.name)}</button>`).join('')}
+          <button data-m="">＋ Ich bin neu (${esc(userName())})</button>
+        </div>`, (el) => {
+        el.querySelectorAll('[data-m]').forEach((b) => { b.onclick = () => { closeModal(); resolve(b.dataset.m || null); }; });
+      });
+      const backdrop = document.querySelector('#modal-root [data-close]');
+      if (backdrop) backdrop.onclick = () => { closeModal(); resolve(null); };
+    });
+  }
+
+  /** Verknüpft mich mit einem Mitglied (oder legt ein neues an) und gibt dessen ID zurück. */
+  function linkMe(memberId) {
+    let m = memberId && member(memberId);
+    if (!m) {
+      m = { id: uid(), name: userName() || 'Ich', color: T.MEMBER_COLORS[state.members.length % T.MEMBER_COLORS.length], offDays: [] };
+      state.members.push(m);
+    }
+    m.userId = cloud.user.id;
+    return m.id;
+  }
+
+  /** Den bisherigen Putzplan (ohne Konto) als ersten Haushalt ins Konto übernehmen. */
+  async function moveLocalToCloud(meId) {
+    const chosen = meId !== undefined ? meId : await whoAreYou('Damit deine Punkte erhalten bleiben: Welcher Name bist du?');
+    const myId = linkMe(chosen);
+    const name = 'Zuhause';
+    const h = await Cloud.createHousehold(name, '🏠', myId, userName());
+    // Sicherheitskopie des bisherigen Stands behalten.
+    lsSet('putzplan.v1.vor-konto', JSON.stringify(state));
+    try { localStorage.removeItem(STORAGE_KEY); } catch (e) { /* egal */ }
+    activeId = h;
+    lsSet(ACTIVE_KEY, h);
+    persist();
+    await refreshHouseholds();
+    subscribeActive();
+    render();
+    await syncNow();
+    refreshMembers();
+    toast('Dein Putzplan ist jetzt in deinem Konto gesichert ☁️');
+  }
+
+  // ------------------------------------------------ Haushalte verwalten
+
+  function householdChip() {
+    if (!cloud.user || !isCloudHousehold()) return '';
+    const h = activeHousehold();
+    const status = { syncing: '⏳', offline: '⚠️' }[cloud.status] || '';
+    return `<button class="household-chip" data-action="household-menu">${h ? `${h.icon} ${esc(h.name)}` : '🏠 Haushalt'} ▾
+      ${status ? `<span title="${cloud.status === 'offline' ? 'Offline – wird später abgeglichen' : 'Wird abgeglichen'}">${status}</span>` : ''}</button>`;
+  }
+
+  function householdMenu() {
+    openModal(`
+      <h2>Haushalt wechseln</h2>
+      <div class="menu">
+        ${cloud.households.map((h) => `<button data-h="${h.id}" class="${h.id === activeId ? 'on' : ''}">${h.icon} ${esc(h.name)}${h.id === activeId ? ' ✓' : ''}</button>`).join('')}
+        <button data-new>＋ Neuer Haushalt (z. B. Ferienhaus)</button>
+        <button data-join>🔑 Mit Code beitreten</button>
+        <button data-cancel class="muted">Abbrechen</button>
+      </div>`, (el) => {
+      el.querySelectorAll('[data-h]').forEach((b) => { b.onclick = () => { closeModal(); switchHousehold(b.dataset.h); }; });
+      el.querySelector('[data-new]').onclick = () => { closeModal(); newHouseholdDialog(); };
+      el.querySelector('[data-join]').onclick = () => { closeModal(); joinDialog(); };
+      el.querySelector('[data-cancel]').onclick = closeModal;
+    });
+  }
+
+  function householdForm(title, h, onSubmit) {
+    let icon = (h && h.icon) || '🏠';
+    openModal(`
+      <h2>${title}</h2>
+      <form class="form">
+        <label>Name<input class="input" name="name" required maxlength="40" value="${esc((h && h.name) || '')}" placeholder="z. B. Wohnung, Ferienhaus"></label>
+        <div class="icon-grid">${HOUSEHOLD_ICONS.map((i) => `<button type="button" class="icon-pick ${i === icon ? 'on' : ''}" data-icon="${i}">${i}</button>`).join('')}</div>
+        <div class="btn-row"><button type="button" class="btn" data-cancel>Abbrechen</button><button type="submit" class="btn primary">Speichern</button></div>
+      </form>`, (el) => {
+      el.querySelectorAll('[data-icon]').forEach((b) => {
+        b.onclick = () => { icon = b.dataset.icon; el.querySelectorAll('[data-icon]').forEach((x) => x.classList.toggle('on', x === b)); };
+      });
+      el.querySelector('[data-cancel]').onclick = closeModal;
+      el.querySelector('form').onsubmit = (ev) => {
+        ev.preventDefault();
+        const name = ev.target.name.value.trim();
+        if (!name) return;
+        closeModal();
+        cloudTask(() => onSubmit(name, icon));
+      };
+    });
+  }
+
+  function newHouseholdDialog() {
+    householdForm('Neuer Haushalt', null, async (name, icon) => {
+      const me = { id: uid(), name: userName() || 'Ich', color: T.MEMBER_COLORS[0], offDays: [], userId: cloud.user.id };
+      const h = await Cloud.createHousehold(name, icon, me.id, userName());
+      await refreshHouseholds();
+      persist();
+      activeId = h;
+      lsSet(ACTIVE_KEY, h);
+      state = defaultState();
+      state.members = [me];
+      cloud.members = [];
+      ui = { tab: 'today', roomId: null, showMore: false, onboardStep: 1, newHousehold: true, onboardMembers: [me.name] };
+      subscribeActive();
+      render();
+    });
+  }
+
+  function joinDialog() {
+    openModal(`
+      <h2>🔑 Haushalt beitreten</h2>
+      <p class="muted">Gib den 6-stelligen Code ein, den du bekommen hast. Deine bisherigen Haushalte bleiben erhalten.</p>
+      <div class="form">
+        <input class="input code-input" inputmode="numeric" maxlength="6" placeholder="123456" data-code>
+        <button class="btn primary block" data-join>Beitreten</button>
+        <button class="btn block" data-cancel>Abbrechen</button>
+      </div>`, (el) => {
+      const input = el.querySelector('[data-code]');
+      input.focus();
+      el.querySelector('[data-cancel]').onclick = closeModal;
+      el.querySelector('[data-join]').onclick = () => {
+        const code = input.value.replace(/\D/g, '');
+        if (code.length !== 6) { toast('Der Code hat 6 Ziffern.'); return; }
+        closeModal();
+        cloudTask(async () => {
+          const h = await Cloud.join(code, userName());
+          await refreshHouseholds();
+          await switchHousehold(h);
+          const chosen = await whoAreYou();
+          const myId = linkMe(chosen);
+          await Cloud.setMyMember(h, cloud.user.id, myId, userName());
+          await refreshHouseholds();
+          save();
+          render();
+          const hh = activeHousehold();
+          toast(`Willkommen in „${hh ? hh.name : 'deinem neuen Haushalt'}“ 🎉`);
+        });
+      };
+    });
+  }
+
+  async function inviteDialog() {
+    let code;
+    try { code = await Cloud.invite(activeId); } catch (e) { toast(Cloud.friendly(e)); return; }
+    const h = activeHousehold();
+    const text = `Komm in meinen Haushalt „${h ? h.name : 'Zuhause'}“ in Putzplan: Öffne die App → Mehr → Haushalt → „Mit Code beitreten“ und gib diesen Code ein: ${code} (7 Tage gültig)`;
+    openModal(`
+      <h2>✉️ Einladen</h2>
+      <p class="muted">Schick diesen Code an die Person, die mitmachen soll. Er ist 7 Tage gültig.</p>
+      <div class="invite-code">${code.slice(0, 3)} ${code.slice(3)}</div>
+      <p class="small muted">In der App: Mehr → Haushalt → „Mit Code beitreten“.</p>
+      <div class="btn-row"><button class="btn" data-cancel>Schließen</button><button class="btn primary" data-share>Teilen</button></div>`, (el) => {
+      el.querySelector('[data-cancel]').onclick = closeModal;
+      el.querySelector('[data-share]').onclick = async () => {
+        try {
+          if (Native.isNative && Native.shareText) await Native.shareText(text);
+          else if (navigator.share) await navigator.share({ text });
+          else { await navigator.clipboard.writeText(text); toast('Einladung kopiert 📋'); }
+        } catch (e) { /* abgebrochen */ }
+      };
+    });
+  }
+
+  function myRole() {
+    const h = activeHousehold();
+    return h ? h.role : null;
+  }
+
+  async function leaveHousehold() {
+    const h = activeHousehold();
+    if (!h || !confirm(`„${h.name}“ wirklich verlassen? Die Daten bleiben für die anderen erhalten.`)) return;
+    cloudTask(async () => {
+      await Cloud.leave(h.id);
+      await afterHouseholdGone(h.id);
+      await refreshHouseholds();
+      toast(`„${h.name}“ verlassen`);
+    });
+  }
+
+  async function deleteHousehold() {
+    const h = activeHousehold();
+    if (!h || !confirm(`„${h.name}“ mit allen Räumen, Aufgaben, Pflanzen und dem Verlauf für alle Mitglieder löschen?`)) return;
+    if (!confirm('Wirklich? Das lässt sich nicht rückgängig machen.')) return;
+    cloudTask(async () => {
+      await Cloud.deleteHousehold(h.id);
+      await afterHouseholdGone(h.id);
+      await refreshHouseholds();
+      toast(`„${h.name}“ gelöscht`);
+    });
+  }
+
+  async function removeAccountMember(userId) {
+    const m = cloud.members.find((x) => x.user_id === userId);
+    if (!m || !confirm(`${m.display_name || 'Diese Person'} aus dem Haushalt entfernen?`)) return;
+    cloudTask(async () => {
+      await Cloud.removeMember(activeId, userId);
+      const linked = state.members.find((x) => x.userId === userId);
+      if (linked) { delete linked.userId; save(); }
+      await refreshMembers();
+    });
+  }
+
+  /** Alle Haushalts-Daten vom Gerät entfernen und zum Anfang zurück (Abmelden, Konto gelöscht). */
+  function clearCloudData() {
+    for (const h of cloud.households.slice()) forgetHousehold(h.id);
+    if (activeId !== 'local') forgetHousehold(activeId);
+    if (cloud.unsubscribe) { cloud.unsubscribe(); cloud.unsubscribe = null; }
+    cloud.user = null;
+    cloud.households = [];
+    cloud.members = [];
+    lsSet(HOUSEHOLDS_KEY, '[]');
+    activeId = 'local';
+    lsSet(ACTIVE_KEY, 'local');
+    state = load('local');
+    migrate();
+    ui = { tab: 'today', roomId: null, showMore: false };
+    render();
+  }
+
+  async function signOutAccount() {
+    if (!confirm('Abmelden? Deine Haushalte werden von diesem Handy entfernt – in deinem Konto bleiben sie erhalten.')) return;
+    await syncNow();
+    await Cloud.signOut();
+    clearCloudData();
+    toast('Abgemeldet');
+  }
+
+  async function deleteAccount() {
+    if (!confirm('Konto löschen? Du verlässt alle Haushalte. Haushalte, in denen sonst niemand ist, werden mit allen Daten gelöscht.')) return;
+    if (!confirm('Wirklich endgültig löschen? Das lässt sich nicht rückgängig machen.')) return;
+    cloudTask(async () => {
+      await Cloud.deleteAccount();
+      await Cloud.signOut();
+      clearCloudData();
+      toast('Dein Konto wurde gelöscht.');
+    });
+  }
+
+  function renameMe() {
+    const name = prompt('Dein Name', userName());
+    if (!name || !name.trim()) return;
+    cloudTask(async () => {
+      await Cloud.updateName(name.trim());
+      cloud.user.user_metadata = Object.assign({}, cloud.user.user_metadata, { name: name.trim() });
+      const myId = myMemberId();
+      if (myId && member(myId)) member(myId).name = name.trim();
+      for (const h of cloud.households) {
+        await Cloud.setMyMember(h.id, cloud.user.id, h.id === activeId ? myId : h.memberId, name.trim()).catch(() => {});
+      }
+      save();
+      render();
+    });
+  }
+
+  function syncStatusText() {
+    if (cloud.status === 'offline') return '⚠️ Offline – wird abgeglichen, sobald du wieder Netz hast';
+    if (cloud.status === 'syncing') return '⏳ Wird abgeglichen …';
+    if (cloud.lastSync) return `✓ Abgeglichen um ${new Date(cloud.lastSync).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}`;
+    return '';
+  }
+
+  function accountCard() {
+    if (!cloud.user) {
+      return `<section class="card">
+        <h2>☁️ Konto</h2>
+        <p class="muted small">Mit einem Konto ist dein Putzplan gesichert und du kannst ihn mit deinem Haushalt teilen –
+          jede Person auf ihrem eigenen Handy.</p>
+        <button class="btn primary block" data-action="login">Anmelden oder Konto anlegen</button>
+      </section>`;
+    }
+    return `<section class="card">
+        <h2>☁️ Konto</h2>
+        <div class="row account-row"><div class="row-main"><div class="row-title">${esc(userName())}</div>
+          <div class="row-sub">${esc(cloud.user.email || '')}</div></div>
+          <button class="icon-btn" data-action="rename-me" title="Name ändern">✎</button></div>
+        <p class="small muted">${syncStatusText()}</p>
+        <div class="btn-row"><button class="btn" data-action="logout">Abmelden</button>
+          <button class="btn danger" data-action="delete-account">Konto löschen</button></div>
+      </section>`;
+  }
+
+  function householdCard() {
+    if (!cloud.user || !isCloudHousehold()) return '';
+    const h = activeHousehold();
+    const owner = myRole() === 'owner';
+    return `<section class="card">
+        <h2>${h ? `${h.icon} ${esc(h.name)}` : '🏠 Haushalt'}</h2>
+        <p class="muted small">Alle hier sehen dieselben Räume, Aufgaben, Pflanzen und Punkte.</p>
+        <ul class="list">${cloud.members.map((m) => {
+          const linked = state.members.find((x) => x.userId === m.user_id);
+          return `<li class="row">${linked ? avatar(linked) : '<span class="avatar">?</span>'}
+            <div class="row-main"><div class="row-title">${esc((linked && linked.name) || m.display_name || 'Mitglied')}
+              ${m.user_id === cloud.user.id ? '<span class="badge">Du</span>' : ''}${m.role === 'owner' ? ' <span class="badge">Verwaltet</span>' : ''}</div></div>
+            ${owner && m.user_id !== cloud.user.id ? `<button class="icon-btn" data-action="remove-account" data-id="${m.user_id}" title="Entfernen">✕</button>` : ''}</li>`;
+        }).join('')}</ul>
+        <button class="btn primary block" data-action="invite">✉️ Jemanden einladen</button>
+        <div class="btn-row">
+          <button class="btn" data-action="household-menu">Wechseln / Neu</button>
+          <button class="btn" data-action="household-edit">Umbenennen</button>
+        </div>
+        <div class="btn-row">
+          <button class="btn" data-action="household-leave">Verlassen</button>
+          ${owner ? '<button class="btn danger" data-action="household-delete">Löschen</button>' : ''}
+        </div>
+      </section>`;
+  }
+
+  /** Einmaliger Hinweis für alle, die die App schon ohne Konto nutzen. */
+  function accountHint() {
+    if (cloud.user || isCloudHousehold() || state.settings.accountHintDismissed || !Cloud || !Cloud.available()) return '';
+    return `<div class="hint"><span>☁️</span><div class="grow"><strong>Neu: Konto & gemeinsamer Haushalt</strong><br>
+      <span class="muted small">Putzplan sichern und mit deinem Haushalt teilen – jede Person auf dem eigenen Handy.</span></div>
+      <button class="btn primary" data-action="login">Los</button>
+      <button class="icon-btn" data-action="dismiss-account-hint" title="Ausblenden">✕</button></div>`;
+  }
+
   // ---------------------------------------------------------------- Pflanzen
   //
   // Jede Pflanze bekommt Pflegeaufgaben (Gießen, Düngen, Umtopfen) als normale Aufgaben
@@ -1509,7 +2263,8 @@
       for (const c of P.careTasks(p, day, weather)) {
         let t = state.tasks.find((x) => x.plantId === p.id && x.plantCare === c.care);
         if (!t) {
-          t = { id: uid(), plantId: p.id, plantCare: c.care, minutes: c.minutes, lastDone: null, assignee: null, paused: false, snoozedUntil: null };
+          // Feste ID je Pflanze und Pflege – so entstehen auf zwei Geräten keine doppelten Aufgaben.
+          t = { id: `${p.id}-${c.care}`, plantId: p.id, plantCare: c.care, minutes: c.minutes, lastDone: null, assignee: null, paused: false, snoozedUntil: null };
           state.tasks.push(t);
         }
         Object.assign(t, { roomId: p.roomId, name: c.name, note: c.note, dueOn: c.dueOn, interval: c.interval });
@@ -2543,6 +3298,8 @@
       try {
         const data = JSON.parse(await input.files[0].text());
         if (!Array.isArray(data.tasks) || !Array.isArray(data.rooms)) throw new Error('Format');
+        if (isCloudHousehold() && !confirm('Der Import ersetzt die Daten dieses Haushalts – für alle Mitglieder. Fortfahren?')) return;
+        data.session = null;
         state = Object.assign(defaultState(), data);
         migrate();
         save(); render();
@@ -2602,17 +3359,21 @@
       return;
     }
     tabs.hidden = false;
-    tabs.querySelectorAll('[data-tab]').forEach((b) => b.classList.toggle('active', b.dataset.tab === ui.tab));
+    const activeTab = ui.tab === 'team' ? 'settings' : ui.tab;
+    tabs.querySelectorAll('[data-tab]').forEach((b) => b.classList.toggle('active', b.dataset.tab === activeTab));
     const views = { today: viewToday, week: viewWeek, plants: viewPlants, rooms: viewRooms, team: viewTeam, settings: viewSettings };
     if (state.session && ui.tab === 'today') views.today = viewSession;
     view.innerHTML = views[ui.tab]();
     ensureSessionTimer();
   }
 
-  function finishOnboarding() {
-    const keys = ui.onboardRooms;
+  async function finishOnboarding() {
+    const keys = ui.onboardRooms || new Set();
+    const newHousehold = !!ui.newHousehold;
     T.ROOM_TEMPLATES.filter((r) => keys.has(r.key)).forEach((r) => addRoomFromTemplate(r, true));
+    // Neuer Haushalt mit Konto: Ich bin schon Mitglied (erster Name), die übrigen kommen dazu.
     (ui.onboardMembers || []).map((n) => n.trim()).filter(Boolean).forEach((name, i) => {
+      if (newHousehold && i === 0 && state.members.length) return;
       state.members.push({ id: uid(), name, color: T.MEMBER_COLORS[i % T.MEMBER_COLORS.length], offDays: [] });
     });
     const m = ui.onboardMinutes || 20;
@@ -2625,6 +3386,17 @@
     syncAllergyTasks();
     state.onboarded = true;
     ui = { tab: 'today', roomId: null, showMore: false };
+    if (cloud.user && activeId === 'local') {
+      // Mit Konto eingerichtet: gleich als Haushalt im Konto anlegen (erster Name = ich).
+      try {
+        await moveLocalToCloud(state.members[0] ? state.members[0].id : null);
+      } catch (e) {
+        save();
+        render();
+        toast(`Gespeichert auf dem Handy – Konto-Abgleich klappt später (${Cloud.friendly(e)})`);
+      }
+      return;
+    }
     save();
     render();
     toast('Dein Putzplan ist fertig! 🧽');
@@ -2723,6 +3495,27 @@
       case 'onboard-add-member': ui.onboardMembers.push(''); render(); break;
       case 'onboard-next': ui.onboardStep = (ui.onboardStep || 1) + 1; render(); break;
       case 'onboard-finish': finishOnboarding(); break;
+      case 'onboard-login': loginDialog('onboarding-finish'); break;
+      case 'onboard-welcome-login': loginDialog('welcome'); break;
+      case 'onboard-join': if (cloud.user) joinDialog(); else loginDialog('join'); break;
+      case 'login': loginDialog('settings'); break;
+      case 'logout': signOutAccount(); break;
+      case 'delete-account': deleteAccount(); break;
+      case 'rename-me': renameMe(); break;
+      case 'household-menu': householdMenu(); break;
+      case 'household-edit': {
+        const h = activeHousehold();
+        householdForm('Haushalt bearbeiten', h, async (name, icon) => {
+          await Cloud.renameHousehold(activeId, name, icon);
+          await refreshHouseholds();
+        });
+        break;
+      }
+      case 'household-leave': leaveHousehold(); break;
+      case 'household-delete': deleteHousehold(); break;
+      case 'invite': inviteDialog(); break;
+      case 'remove-account': removeAccountMember(id); break;
+      case 'dismiss-account-hint': state.settings.accountHintDismissed = true; save(); render(); break;
       default: break;
     }
   });
@@ -2795,7 +3588,36 @@
       refreshNativeStatus();
       checkForUpdate(false);
     }
+    scheduleSync(0);
   });
+
+  window.addEventListener('online', () => scheduleSync(0));
+  // Wer in der Ansicht getippt hat, bekommt fremde Änderungen, sobald das Feld verlassen wird.
+  document.addEventListener('focusout', () => { if (pendingRender) setTimeout(softRender, 50); });
+
+  /** Anmeldung beim Start wiederherstellen und auf Änderungen (Anmelden, Abmelden) hören. */
+  async function startCloud() {
+    if (!Cloud || !Cloud.available()) return;
+    try {
+      const s = await Cloud.session();
+      cloud.user = s ? s.user : null;
+    } catch (e) { cloud.user = null; }
+    Cloud.onAuth((event, s) => {
+      if (event === 'SIGNED_OUT') { if (cloud.user) clearCloudData(); return; }
+      if (s && s.user) {
+        const fresh = !cloud.user;
+        cloud.user = s.user;
+        // Rückkehr von der Google-Weiterleitung (Browser) oder neue Anmeldung.
+        if (fresh && activeId === 'local') signedIn(s.user);
+      }
+    });
+    if (!cloud.user) return;
+    if (activeId === 'local') { signedIn(cloud.user); return; }
+    refreshHouseholds().then(() => softRender());
+    subscribeActive();
+    scheduleSync(0);
+    refreshMembers();
+  }
 
   async function start() {
     migrate();
@@ -2825,6 +3647,7 @@
     }
     render();
     refreshWeather(false);
+    startCloud();
   }
 
   start().catch(showError);

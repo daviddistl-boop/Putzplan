@@ -6,10 +6,15 @@
 (function (root) {
   'use strict';
 
+  // Supabase-Projekt „Putzplan“. Der Publishable Key ist öffentlich – geschützt wird über die Zugriffsregeln der Datenbank.
+  const SUPABASE_URL = 'https://nqopgnogbuidqtfwpsat.supabase.co';
+  const SUPABASE_KEY = 'sb_publishable_h9vDlRql-3T1gqvmiZbf9A_19rLtjG2';
+  // Web-Client-ID aus der Google Cloud Console (öffentlich). Leer = Google-Anmeldung noch nicht eingerichtet.
+  const GOOGLE_WEB_CLIENT_ID = '';
   // Adresse der Supabase Edge Function für Push-Erinnerungen.
-  const PUSH_API = 'https://nqopgnogbuidqtfwpsat.supabase.co/functions/v1/push';
+  const PUSH_API = `${SUPABASE_URL}/functions/v1/push`;
   // Pflanzenerkennung per Foto (Edge Function, fragt mit geheimem Schlüssel bei Pl@ntNet an).
-  const PLANT_ID_API = 'https://nqopgnogbuidqtfwpsat.supabase.co/functions/v1/plant-id';
+  const PLANT_ID_API = `${SUPABASE_URL}/functions/v1/plant-id`;
 
   const DB_NAME = 'putzplan';
   const STORE = 'kv';
@@ -71,5 +76,5 @@
     return reminderMessages(state, S, 1)[0];
   }
 
-  root.PutzplanShared = { PUSH_API, PLANT_ID_API, kvGet, kvSet, reminderMessage, reminderMessages };
+  root.PutzplanShared = { SUPABASE_URL, SUPABASE_KEY, GOOGLE_WEB_CLIENT_ID, PUSH_API, PLANT_ID_API, kvGet, kvSet, reminderMessage, reminderMessages };
 })(typeof self !== 'undefined' ? self : globalThis);
