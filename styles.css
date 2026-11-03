@@ -381,3 +381,39 @@ details.tips ul { margin: 6px 0 0; padding-left: 20px; display: grid; gap: 4px; 
 .account-row { margin: 6px 0; }
 .menu button.on { outline: 2px solid var(--primary); }
 .menu .avatar { margin-right: 6px; vertical-align: middle; }
+
+/* Einkaufsliste */
+.tab-icon { position: relative; }
+.tab-badge {
+  position: absolute; top: -4px; right: -12px; min-width: 18px; height: 18px; padding: 0 5px;
+  border-radius: 99px; background: var(--bad); color: #fff; font-size: 0.68rem; font-weight: 700;
+  display: grid; place-items: center; filter: none; opacity: 1;
+}
+.tab-badge[hidden] { display: none; }
+.list-chips { display: flex; gap: 8px; overflow-x: auto; padding: 4px 0 8px; margin: 0 -16px; padding-left: 16px; padding-right: 16px; scrollbar-width: none; }
+.list-chips .chip { flex: none; }
+.shop-add .input { margin: 4px 0 10px; }
+.shop-cat h3, .shop-catalog h3 { margin: 18px 0 8px; font-size: 1rem; }
+.tile-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; }
+.tile {
+  position: relative; aspect-ratio: 1 / 1; border-radius: 16px; padding: 8px 6px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  text-align: center; cursor: pointer; user-select: none; -webkit-user-select: none;
+  background: var(--surface); box-shadow: var(--shadow); transition: transform 0.1s;
+}
+.tile:active { transform: scale(0.94); }
+.tile.open { background: #e2584d; color: #fff; }
+.tile.recent { opacity: 0.75; }
+.tile.catalog.on { background: color-mix(in srgb, #e2584d 22%, var(--surface)); }
+.tile.free { border: 2px dashed var(--line); box-shadow: none; }
+.tile-icon { font-size: 2rem; line-height: 1.1; }
+.tile-name { font-size: 0.8rem; font-weight: 600; line-height: 1.15; overflow-wrap: anywhere; }
+.tile-spec { font-size: 0.7rem; opacity: 0.85; line-height: 1.1; overflow-wrap: anywhere; }
+.tile-who { position: absolute; left: 6px; top: 6px; width: 18px; height: 18px; border-radius: 50%; color: #fff; font-size: 0.65rem; font-weight: 700; display: grid; place-items: center; }
+.tile-edit { position: absolute; right: 4px; top: 4px; border: 0; background: rgba(255,255,255,0.22); color: inherit; border-radius: 50%; width: 24px; height: 24px; font-size: 0.75rem; padding: 0; }
+.shop-catalog details { background: var(--surface); border-radius: 14px; padding: 10px 12px; margin-bottom: 8px; box-shadow: var(--shadow); }
+.shop-catalog summary { cursor: pointer; font-weight: 600; }
+.shop-catalog details[open] .tile-grid { margin-top: 10px; }
+.shop-catalog .tile { box-shadow: none; background: var(--surface-2); }
+.quick-other { margin-top: 12px; }
+.modal .tile-grid { margin-top: 6px; }

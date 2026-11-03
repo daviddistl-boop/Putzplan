@@ -26,6 +26,8 @@
       tasks: [],
       members: [],
       plants: [],
+      shoppingLists: [],
+      shoppingItems: [],
       history: [],
       settings: { minutesPerWeekday: [20, 20, 20, 20, 20, 60, 0] },
     };
@@ -827,6 +829,7 @@
       }).join('')}</ul>
       <div class="btn-row">
         <button class="btn" data-action="session-add">＋ Aufgabe hinzufügen</button>
+        <button class="btn" data-action="session-shop">🛒 Etwas ist leer</button>
         ${!s.timeUp && sessionRemaining(s) > 2 * MIN ? '<button class="btn" data-action="session-more">✨ Passende vorschlagen</button>' : ''}
       </div>
       <p class="muted small center">Tipp: Hake jede Aufgabe direkt ab, wenn du fertig bist – so lernt die App, wie lange du wirklich brauchst.</p>`;
@@ -1225,6 +1228,7 @@
         <button data-m="snooze1">⏰ Auf morgen verschieben</button>
         <button data-m="snooze3">⏰ Um 3 Tage verschieben</button>
         ${t.plantId ? '' : '<button data-m="skip">⏭️ Diesmal überspringen</button>'}
+        <button data-m="shop">🛒 Auf die Einkaufsliste</button>
         <button data-m="edit">✎ ${t.plantId ? 'Pflanze bearbeiten' : 'Bearbeiten'}</button>
         <button data-m="cancel" class="muted">Abbrechen</button>
       </div>`, (el) => {
@@ -1238,6 +1242,7 @@
           if (m === 'snooze3') snoozeTask(taskId, 3);
           if (m === 'skip') skipTask(taskId);
           if (m === 'edit') editTask(taskId);
+          if (m === 'shop') shopQuickDialog('Für „' + t.name + '“', Sh.suggestionsFor(t.name));
         };
       });
     });
@@ -2223,6 +2228,286 @@
       <button class="icon-btn" data-action="dismiss-account-hint" title="Ausblenden">✕</button></div>`;
   }
 
+  // ---------------------------------------------------------------- Einkaufsliste
+  //
+  // Wie bei Bring!: Artikel als Kacheln, nach Supermarkt-Kategorien sortiert. Ein Tipp auf eine
+  // Kachel hakt sie ab, „Zuletzt gekauft“ holt sie mit einem Tipp zurück. Listen und Artikel
+  // gehören zum Haushalt und werden mit allen Mitgliedern abgeglichen.
+
+  const Sh = window.Shopping;
+  const DEFAULT_LIST_ID = 'einkauf'; // feste ID – zwei Handys legen sonst je eine eigene Liste an
+  const KEEP_DONE = 40; // so viele gekaufte Artikel bleiben pro Liste für „Zuletzt gekauft“
+  const LIST_ICONS = ['🛒', '🧴', '🔨', '🎁', '🌱', '🐾', '💊', '🏖️'];
+
+  function shopLists() {
+    if (!Array.isArray(state.shoppingLists)) state.shoppingLists = [];
+    if (!Array.isArray(state.shoppingItems)) state.shoppingItems = [];
+    if (!state.shoppingLists.length) state.shoppingLists.push({ id: DEFAULT_LIST_ID, name: 'Einkauf', icon: '🛒' });
+    return state.shoppingLists;
+  }
+
+  function currentList() {
+    const lists = shopLists();
+    return lists.find((l) => l.id === ui.shopListId) || lists[0];
+  }
+
+  const shopItem = (id) => byId(state.shoppingItems || [], id);
+  const openItems = (listId) => (state.shoppingItems || []).filter((i) => i.listId === listId && !i.done);
+  const openCount = () => (state.shoppingItems || []).filter((i) => !i.done && (state.shoppingLists || []).some((l) => l.id === i.listId)).length;
+
+  /** Kategorie für einen eingetippten Namen: gemerkt, aus dem Katalog oder „Sonstiges“. */
+  function guessCategory(name) {
+    const remembered = (state.settings.shopCats || {})[Sh.norm(name)];
+    if (remembered) return remembered;
+    const hit = Sh.findByName(name) || Sh.norm(name).split(/[\s,/-]+/).filter((w) => w.length >= 3).map(Sh.findByName).find(Boolean);
+    return hit ? hit.cat : 'other';
+  }
+
+  /**
+   * Artikel auf eine Liste setzen. Steht er schon drauf, wird er nur „angefasst“ – so gewinnt
+   * „hinzufügen“ gegen ein gleichzeitiges Abhaken auf einem anderen Handy.
+   */
+  function addShopItem(entry, listId, opts) {
+    const o = opts || {};
+    const list = listId || currentList().id;
+    const name = entry.name.trim();
+    if (!name) return null;
+    const key = entry.key || (Sh.findByName(name) || {}).key || null;
+    let it = state.shoppingItems.find((x) => x.listId === list && (key ? x.key === key : Sh.norm(x.name) === Sh.norm(name)));
+    const now = Date.now();
+    let msg;
+    if (it && !it.done) {
+      it.addedAt = now;
+      if (entry.spec) it.spec = entry.spec;
+      msg = `${it.name} steht schon auf der Liste`;
+    } else if (it) {
+      Object.assign(it, { done: false, doneAt: null, addedAt: now, addedBy: myMemberId() || null, spec: entry.spec || '' });
+      msg = `${it.icon} ${it.name} hinzugefügt`;
+    } else {
+      const cat = entry.cat || guessCategory(name);
+      it = { id: uid(), listId: list, name, key, cat, icon: entry.icon || Sh.iconFor(name, cat), spec: entry.spec || '', done: false, addedAt: now, addedBy: myMemberId() || null };
+      state.shoppingItems.push(it);
+      msg = `${it.icon} ${it.name} hinzugefügt`;
+    }
+    if (!o.quiet) toast(msg);
+    return it;
+  }
+
+  /** Gekaufte Artikel aufräumen: pro Liste nur die letzten behalten. */
+  function pruneShopItems(listId) {
+    const done = state.shoppingItems.filter((i) => i.listId === listId && i.done).sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0));
+    if (done.length <= KEEP_DONE) return;
+    const drop = new Set(done.slice(KEEP_DONE).map((i) => i.id));
+    state.shoppingItems = state.shoppingItems.filter((i) => !drop.has(i.id));
+  }
+
+  function shopDone(id) {
+    const it = shopItem(id);
+    if (!it) return;
+    it.done = true;
+    it.doneAt = Date.now();
+    pruneShopItems(it.listId);
+    save();
+    render();
+    toast(`${it.icon} ${it.name} gekauft`, { label: 'Rückgängig', run: () => { it.done = false; it.doneAt = null; save(); render(); } });
+  }
+
+  function shopTile(it, mode) {
+    const m = it.addedBy && member(it.addedBy);
+    const action = mode === 'open' ? 'shop-done' : 'shop-add-item';
+    return `<div class="tile ${mode}" role="button" tabindex="0" data-action="${action}" data-id="${it.id}">
+      <span class="tile-icon">${it.icon}</span>
+      <span class="tile-name">${esc(it.name)}</span>
+      ${it.spec ? `<span class="tile-spec">${esc(it.spec)}</span>` : ''}
+      ${mode === 'open' && m && state.members.length > 1 ? `<span class="tile-who" style="background:${m.color}" title="Hinzugefügt von ${esc(m.name)}">${esc(m.name.charAt(0).toUpperCase())}</span>` : ''}
+      ${mode === 'open' ? `<button class="tile-edit" data-action="shop-edit" data-id="${it.id}" title="Bearbeiten">✎</button>` : ''}
+    </div>`;
+  }
+
+  function catalogTile(c, list) {
+    const on = (state.shoppingItems || []).some((i) => i.listId === list.id && !i.done && i.key === c.key);
+    return `<div class="tile catalog ${on ? 'on' : ''}" role="button" tabindex="0" data-action="shop-add-key" data-key="${c.key}">
+      <span class="tile-icon">${c.icon}</span><span class="tile-name">${esc(c.name)}</span></div>`;
+  }
+
+  /** Vorschläge beim Tippen: Katalog-Treffer plus „…“ als eigener Artikel. */
+  function shopSuggestions(q) {
+    const query = (q || '').trim();
+    if (!query) return '';
+    const list = currentList();
+    const hits = Sh.search(query, 9);
+    const exact = hits.some((h) => Sh.norm(h.name) === Sh.norm(query));
+    return `<div class="tile-grid">
+      ${exact ? '' : `<div class="tile catalog free" role="button" tabindex="0" data-action="shop-add-free">
+        <span class="tile-icon">${Sh.iconFor(query, guessCategory(query))}</span><span class="tile-name">${esc(query)}</span><span class="tile-spec">eigener Artikel</span></div>`}
+      ${hits.map((c) => catalogTile(c, list)).join('')}
+    </div>`;
+  }
+
+  function viewShopping() {
+    const list = currentList();
+    const lists = shopLists();
+    const open = openItems(list.id);
+    const recent = state.shoppingItems.filter((i) => i.listId === list.id && i.done)
+      .sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0)).slice(0, 18);
+    const byCat = Sh.CATEGORIES.map((c) => ({ c, items: open.filter((i) => (i.cat || 'other') === c.key).sort((a, b) => a.name.localeCompare(b.name, 'de')) }))
+      .filter((g) => g.items.length);
+    const openCats = ui.shopOpenCats || (ui.shopOpenCats = new Set());
+
+    return `
+      <header class="page-head"><h1>Einkauf</h1>
+        <p class="muted">${open.length ? `${open.length} Artikel auf „${esc(list.name)}“` : `„${esc(list.name)}“ ist leer`}</p></header>
+      <div class="list-chips">
+        ${lists.map((l) => {
+          const n = openItems(l.id).length;
+          return `<button class="chip ${l.id === list.id ? 'on' : ''}" data-action="shop-list" data-id="${l.id}">${l.icon} ${esc(l.name)}${n ? ` · ${n}` : ''}</button>`;
+        }).join('')}
+        <button class="chip" data-action="shop-list-new" title="Neue Liste">＋</button>
+        <button class="chip" data-action="shop-list-edit" title="Liste bearbeiten">✎</button>
+      </div>
+      <div class="shop-add"><input class="input" type="search" data-shop-q placeholder="🔍 Was brauchst du?" value="${esc(ui.shopQuery || '')}" enterkeyhint="done"></div>
+      <div data-shop-suggest>${shopSuggestions(ui.shopQuery)}</div>
+      ${byCat.length ? byCat.map((g) => `<section class="shop-cat"><h3>${g.c.icon} ${g.c.name}</h3>
+          <div class="tile-grid">${g.items.map((i) => shopTile(i, 'open')).join('')}</div></section>`).join('')
+        : '<div class="empty"><div class="emoji">🛒</div><p>Alles da! Tippe oben, was du brauchst, oder wähle unten aus dem Katalog.</p></div>'}
+      ${recent.length ? `<section class="shop-cat"><h3>🕑 Zuletzt gekauft</h3>
+        <div class="tile-grid">${recent.map((i) => shopTile(i, 'recent')).join('')}</div></section>` : ''}
+      <section class="shop-catalog"><h3>📚 Katalog</h3>
+        ${Sh.CATEGORIES.map((c) => `<details ${openCats.has(c.key) ? 'open' : ''} data-shop-cat="${c.key}"><summary>${c.icon} ${c.name}</summary>
+          ${openCats.has(c.key) ? `<div class="tile-grid">${Sh.CATALOG.filter((i) => i.cat === c.key).map((i) => catalogTile(i, list)).join('')}</div>` : ''}</details>`).join('')}
+      </section>`;
+  }
+
+  function addFromQuery() {
+    const q = (ui.shopQuery || '').trim();
+    if (!q) return;
+    const hit = Sh.findByName(q);
+    addShopItem(hit ? { name: hit.name, key: hit.key, cat: hit.cat, icon: hit.icon } : { name: q }, currentList().id);
+    ui.shopQuery = '';
+    save();
+    render();
+    const input = document.querySelector('[data-shop-q]');
+    if (input) input.focus();
+  }
+
+  function shopItemDialog(id) {
+    const it = shopItem(id);
+    if (!it) return;
+    const lists = shopLists();
+    openModal(`
+      <h2>${it.icon} ${esc(it.name)}</h2>
+      <form class="form">
+        ${it.key ? '' : `<label>Name<input class="input" name="name" value="${esc(it.name)}" maxlength="60"></label>`}
+        <label>Angabe<input class="input" name="spec" value="${esc(it.spec || '')}" maxlength="60" placeholder="z. B. 2 Liter, bio, die rote Packung"></label>
+        <label>Kategorie<select class="input" name="cat">${Sh.CATEGORIES.map((c) => `<option value="${c.key}" ${c.key === (it.cat || 'other') ? 'selected' : ''}>${c.icon} ${c.name}</option>`).join('')}</select></label>
+        ${lists.length > 1 ? `<label>Liste<select class="input" name="listId">${lists.map((l) => `<option value="${l.id}" ${l.id === it.listId ? 'selected' : ''}>${l.icon} ${esc(l.name)}</option>`).join('')}</select></label>` : ''}
+        ${it.addedBy && member(it.addedBy) ? `<p class="small muted">Hinzugefügt von ${esc(member(it.addedBy).name)}</p>` : ''}
+        <div class="btn-row">
+          <button type="button" class="btn danger" data-del>Entfernen</button>
+          <button type="button" class="btn" data-cancel>Abbrechen</button>
+          <button type="submit" class="btn primary">Speichern</button>
+        </div>
+      </form>`, (el) => {
+      el.querySelector('[data-cancel]').onclick = closeModal;
+      el.querySelector('[data-del]').onclick = () => {
+        state.shoppingItems = state.shoppingItems.filter((x) => x.id !== id);
+        save(); closeModal(); render();
+      };
+      el.querySelector('form').onsubmit = (ev) => {
+        ev.preventDefault();
+        const f = ev.target;
+        if (f.name && f.name.value.trim()) it.name = f.name.value.trim();
+        it.spec = f.spec.value.trim();
+        if (f.cat.value !== it.cat) {
+          it.cat = f.cat.value;
+          // Eigene Artikel: Kategorie merken, damit sie beim nächsten Mal gleich stimmt.
+          if (!it.key) state.settings.shopCats = Object.assign({}, state.settings.shopCats, { [Sh.norm(it.name)]: it.cat });
+        }
+        if (f.listId) it.listId = f.listId.value;
+        save(); closeModal(); render();
+      };
+    });
+  }
+
+  function shopListDialog(listId) {
+    const l = listId ? shopLists().find((x) => x.id === listId) : null;
+    let icon = (l && l.icon) || '🛒';
+    openModal(`
+      <h2>${l ? 'Liste bearbeiten' : 'Neue Liste'}</h2>
+      <form class="form">
+        <label>Name<input class="input" name="name" required maxlength="40" value="${esc((l && l.name) || '')}" placeholder="z. B. Drogerie, Baumarkt"></label>
+        <div class="icon-grid">${LIST_ICONS.map((i) => `<button type="button" class="icon-pick ${i === icon ? 'on' : ''}" data-icon="${i}">${i}</button>`).join('')}</div>
+        <div class="btn-row">
+          ${l && shopLists().length > 1 ? '<button type="button" class="btn danger" data-del>Löschen</button>' : ''}
+          <button type="button" class="btn" data-cancel>Abbrechen</button>
+          <button type="submit" class="btn primary">Speichern</button>
+        </div>
+      </form>`, (el) => {
+      el.querySelectorAll('[data-icon]').forEach((b) => {
+        b.onclick = () => { icon = b.dataset.icon; el.querySelectorAll('[data-icon]').forEach((x) => x.classList.toggle('on', x === b)); };
+      });
+      el.querySelector('[data-cancel]').onclick = closeModal;
+      const del = el.querySelector('[data-del]');
+      if (del) del.onclick = () => {
+        if (!confirm(`Liste „${l.name}“ mit allen Artikeln löschen?`)) return;
+        state.shoppingLists = state.shoppingLists.filter((x) => x.id !== l.id);
+        state.shoppingItems = state.shoppingItems.filter((x) => x.listId !== l.id);
+        ui.shopListId = null;
+        save(); closeModal(); render();
+      };
+      el.querySelector('form').onsubmit = (ev) => {
+        ev.preventDefault();
+        const name = ev.target.name.value.trim();
+        if (!name) return;
+        if (l) Object.assign(l, { name, icon });
+        else {
+          const nl = { id: uid(), name, icon };
+          shopLists().push(nl);
+          ui.shopListId = nl.id;
+        }
+        save(); closeModal(); render();
+      };
+    });
+  }
+
+  /**
+   * „🛒 Auf die Einkaufsliste“ aus einer Aufgabe, einer Pflanze oder dem Timer:
+   * passende Artikel antippen oder etwas anderes eintippen.
+   */
+  function shopQuickDialog(title, suggestions) {
+    const lists = shopLists();
+    let listId = (lists.find((l) => l.id === ui.shopListId) || lists[0]).id;
+    const draw = () => openModal(`
+      <h2>🛒 ${esc(title)}</h2>
+      ${lists.length > 1 ? `<div class="list-chips">${lists.map((l) => `<button class="chip ${l.id === listId ? 'on' : ''}" data-list="${l.id}">${l.icon} ${esc(l.name)}</button>`).join('')}</div>` : ''}
+      ${suggestions.length ? `<p class="small muted">Antippen, was fehlt:</p>
+        <div class="tile-grid">${suggestions.map((c) => catalogTile(c, { id: listId })).join('')}</div>` : ''}
+      <div class="inline-form quick-other"><input class="input" data-other placeholder="Etwas anderes …" maxlength="60"><button class="btn" data-add>＋</button></div>
+      <button class="btn primary block" data-close-quick>Fertig</button>`, (el) => {
+      el.querySelectorAll('[data-list]').forEach((b) => { b.onclick = () => { listId = b.dataset.list; draw(); }; });
+      el.querySelectorAll('[data-action="shop-add-key"]').forEach((t) => {
+        t.removeAttribute('data-action');
+        t.onclick = () => {
+          const c = Sh.item(t.dataset.key);
+          addShopItem({ name: c.name, key: c.key, cat: c.cat, icon: c.icon }, listId);
+          save();
+          draw();
+        };
+      });
+      const other = el.querySelector('[data-other]');
+      const addOther = () => {
+        if (!other.value.trim()) return;
+        addShopItem({ name: other.value }, listId);
+        save();
+        draw();
+      };
+      el.querySelector('[data-add]').onclick = addOther;
+      other.onkeydown = (ev) => { if (ev.key === 'Enter') addOther(); };
+      el.querySelector('[data-close-quick]').onclick = () => { closeModal(); render(); };
+    });
+    draw();
+  }
+
   // ---------------------------------------------------------------- Pflanzen
   //
   // Jede Pflanze bekommt Pflegeaufgaben (Gießen, Düngen, Umtopfen) als normale Aufgaben
@@ -2468,7 +2753,9 @@
           <div class="row-title">${esc(p.name)}</div>
           <div class="row-sub">${p.name !== sp.name ? `${esc(sp.name)} · ` : ''}${r ? `${r.icon} ${esc(r.name)}` : ''}${P.isOutdoor(p) ? ' · draußen' : ''}</div>
           <div class="row-sub care-chips">${chips}</div>
-          ${dueTasks.length ? `<div class="care-actions">${dueTasks.map((t) => `<button class="btn small-btn" data-action="complete" data-id="${t.id}" data-member="${t.assignee || ''}">✓ ${CARE_ICONS[t.plantCare]} ${esc(careVerb(t))}</button>`).join('')}</div>` : ''}
+          ${dueTasks.length ? `<div class="care-actions">${dueTasks.map((t) => `<button class="btn small-btn" data-action="complete" data-id="${t.id}" data-member="${t.assignee || ''}">✓ ${CARE_ICONS[t.plantCare]} ${esc(careVerb(t))}</button>`
+            + (t.plantCare === 'repot' ? '<button class="btn small-btn" data-action="shop-quick-key" data-key="blumenerde">🛒 Blumenerde</button>' : '')
+            + (t.plantCare === 'feed' ? '<button class="btn small-btn" data-action="shop-quick-key" data-key="duenger">🛒 Dünger leer?</button>' : '')).join('')}</div>` : ''}
         </div>
       </li>`;
     }).join('')}</ul>
@@ -3320,6 +3607,8 @@
   function migrate() {
     if (!state.settings) state.settings = defaultState().settings;
     if (!Array.isArray(state.plants)) state.plants = [];
+    if (!Array.isArray(state.shoppingLists)) state.shoppingLists = [];
+    if (!Array.isArray(state.shoppingItems)) state.shoppingItems = [];
     syncPlants();
     if (!state.settings.autoFollowUps) {
       state.settings.autoFollowUps = true;
@@ -3361,7 +3650,9 @@
     tabs.hidden = false;
     const activeTab = ui.tab === 'team' ? 'settings' : ui.tab;
     tabs.querySelectorAll('[data-tab]').forEach((b) => b.classList.toggle('active', b.dataset.tab === activeTab));
-    const views = { today: viewToday, week: viewWeek, plants: viewPlants, rooms: viewRooms, team: viewTeam, settings: viewSettings };
+    const views = { today: viewToday, week: viewWeek, plants: viewPlants, shop: viewShopping, rooms: viewRooms, team: viewTeam, settings: viewSettings };
+    const badge = document.getElementById('shop-badge');
+    if (badge) { const n = openCount(); badge.textContent = n > 99 ? '99+' : String(n); badge.hidden = !n; }
     if (state.session && ui.tab === 'today') views.today = viewSession;
     view.innerHTML = views[ui.tab]();
     ensureSessionTimer();
@@ -3450,6 +3741,38 @@
       }
       case 'robot-room': toggleRobotRoom(id); break;
       case 'add-plant': editPlant(null); break;
+      case 'shop-done': shopDone(id); break;
+      case 'shop-edit': ev.stopPropagation(); shopItemDialog(id); break;
+      case 'shop-add-item': {
+        const it = shopItem(id);
+        if (it) { addShopItem(it, it.listId); save(); render(); }
+        break;
+      }
+      case 'shop-add-key': {
+        const c = Sh.item(el.dataset.key);
+        if (c) {
+          addShopItem({ name: c.name, key: c.key, cat: c.cat, icon: c.icon }, currentList().id);
+          ui.shopQuery = '';
+          save();
+          render();
+        }
+        break;
+      }
+      case 'shop-add-free': addFromQuery(); break;
+      case 'shop-list': ui.shopListId = id; ui.shopQuery = ''; render(); break;
+      case 'shop-list-new': shopListDialog(null); break;
+      case 'shop-list-edit': shopListDialog(currentList().id); break;
+      case 'shop-quick-key': {
+        const c = Sh.item(el.dataset.key);
+        if (c) { addShopItem({ name: c.name, key: c.key, cat: c.cat, icon: c.icon }, shopLists()[0].id); save(); render(); }
+        break;
+      }
+      case 'session-shop': {
+        const s = state.session;
+        const names = s ? s.taskIds.map((tid) => (task(tid) || {}).name || '').join(' ') : '';
+        shopQuickDialog('Was ist leer?', Sh.suggestionsFor(names));
+        break;
+      }
       case 'edit-plant': editPlant(id); break;
       case 'plant-loc-search': searchPlantLocation(); break;
       case 'plant-loc-pick': pickPlantLocation(+el.dataset.i); break;
@@ -3524,6 +3847,12 @@
     const t = ev.target;
     if (t.dataset.memberName !== undefined) ui.onboardMembers[+t.dataset.memberName] = t.value;
     if (t.dataset.plantLocQ !== undefined) ui.locQuery = t.value;
+    if (t.dataset.shopQ !== undefined) {
+      // Nur die Vorschläge neu zeichnen – Fokus und Tastatur bleiben.
+      ui.shopQuery = t.value;
+      const box = document.querySelector('[data-shop-suggest]');
+      if (box) box.innerHTML = shopSuggestions(t.value);
+    }
     if (t.dataset.onboardMinutes !== undefined) {
       ui.onboardMinutes = +t.value;
       document.getElementById('min-val').textContent = t.value;
@@ -3567,9 +3896,23 @@
     }
   });
 
+  // Katalog der Einkaufsliste: Kacheln erst beim Aufklappen einer Kategorie zeichnen.
+  document.addEventListener('toggle', (ev) => {
+    const d = ev.target;
+    if (!d.dataset || d.dataset.shopCat === undefined) return;
+    const open = ui.shopOpenCats || (ui.shopOpenCats = new Set());
+    if (d.open === open.has(d.dataset.shopCat)) return;
+    if (d.open) open.add(d.dataset.shopCat); else open.delete(d.dataset.shopCat);
+    render();
+  }, true);
+
   document.addEventListener('keydown', (ev) => {
     if (ev.key === 'Escape') closeModal();
     if (ev.key === 'Enter' && ev.target.dataset && ev.target.dataset.plantLocQ !== undefined) searchPlantLocation();
+    if (ev.key === 'Enter' && ev.target.dataset && ev.target.dataset.shopQ !== undefined) {
+      // Enter: genauer Katalog-Treffer, sonst als eigener Artikel.
+      addFromQuery();
+    }
   });
 
   // Plan neu berechnen, wenn die App nach Mitternacht wieder geöffnet wird.

@@ -25,6 +25,12 @@ verteilt die Arbeit nach deinem Zeitbudget auf die Woche und sagt dir jeden Tag,
   zusätzlich von oben gießen. Draußen: kein Gießen nach Regen (ab 5 mm), früher bei über 28 °C, Frost-Hinweis
   unter 2 °C (Wetter von Open-Meteo, Ort in den Einstellungen). Art per Foto erkennen (Pl@ntNet).
   Pflanzenpflege zählt zum Zeitbudget, steht im Putz-Timer und bringt Punkte – oder als eigener Block unter „Heute“.
+- **Einkaufsliste** (Tab 🛒) – Artikel als Kacheln wie bei Bring!, nach Supermarkt-Kategorien sortiert; ein Tipp
+  hakt ab, „Zuletzt gekauft“ holt mit einem Tipp zurück. Katalog mit rund 275 Artikeln, eigene Artikel mit
+  passendem Symbol, Angaben wie „2 Liter“ oder „bio“, mehrere Listen (z. B. Drogerie, Baumarkt), Zähler am Tab.
+  Im Haushalt mit Konto sehen alle dieselbe Liste live, mit „wer hat's hinzugefügt“. Aus jeder Aufgabe
+  („🛒 Auf die Einkaufsliste“ mit passenden Putzmitteln), bei Pflanzen (Blumenerde, Dünger) und im Timer
+  („Etwas ist leer“) direkt auf die Liste.
 - **Konto & gemeinsamer Haushalt** (freiwillig) – Anmeldung per E-Mail-Code oder Google. Mit Konto ist der Putzplan
   gesichert und wird zwischen den Handys aller Mitglieder abgeglichen, auch offline (Abgleich beim nächsten Netz)
   und live. Einladen per 6-stelligem Code, mehrere Haushalte (z. B. Wohnung und Ferienhaus), Mitglieder ohne
@@ -161,6 +167,7 @@ immer dran, auch wenn das Zeitbudget voll ist. Den Tag der Pflanzenpflege berech
 | `sync.js`, `cloud.js` | Abgleich zwischen Geräten (Regeln) und Anbindung an Supabase (Konto, Haushalte) |
 | `vendor/supabase.js` | Supabase-Client (supabase-js 2.118.0, MIT-Lizenz) |
 | `docs/einrichtung-konten.md` | Anleitung: Mail-Versand (Resend) und Google-Anmeldung einrichten |
+| `shopping.js` | Einkaufsliste: Katalog, Kategorien, Suche, Vorschläge zu Aufgaben |
 | `plants.js` | Pflanzen: Steckbriefe, Gieß-Berechnung, Wetter, Lernen aus der Rückmeldung |
 | `templates.js` | Raum- und Aufgabenvorlagen |
 | `styles.css` | Design inkl. Dark Mode |
