@@ -917,6 +917,7 @@
           <p class="muted">${WEEKDAYS[S.weekday(today)]}, ${d.toLocaleDateString('de-DE', { day: 'numeric', month: 'long' })}</p>
           <h1>${greet}!</h1>
           <p class="muted">${items.length ? `${items.length} Aufgabe${items.length === 1 ? '' : 'n'} · ca. ${fmtMinutes(openMin)}` : 'Für heute ist alles erledigt.'}</p>
+          ${streakLine(mine)}
         </div>
         <div class="ring" style="--p:${pct}"><span>${pct}%</span></div>
       </header>
@@ -1077,13 +1078,40 @@
       <button class="btn primary block" data-action="add-task" data-room="${r.id}">＋ Aufgabe hinzufügen</button>`;
   }
 
-  function streakDays() {
-    const days = new Set(state.history.filter((h) => !h.skipped).map((h) => h.day));
+  /**
+   * Serie: Tage am Stück, an denen etwas erledigt wurde (mit `memberId` nur von dieser Person).
+   * Freie Tage (kein Zeitbudget) unterbrechen die Serie nicht. Heute zählt erst, wenn etwas
+   * erledigt ist – bis dahin hält die Serie von gestern.
+   */
+  function streakDays(memberId) {
+    const days = new Set(state.history.filter((h) => !h.skipped && (!memberId || h.memberId === memberId)).map((h) => h.day));
+    const m = memberId && member(memberId);
+    const freeDay = (d) => {
+      if (m) return S.memberBudget(m, state.settings, d) === 0;
+      if (state.members.length) return state.members.every((x) => S.memberBudget(x, state.settings, d) === 0);
+      return S.budgetFor(state.settings, d) === 0;
+    };
     let d = S.today();
     if (!days.has(d)) d -= 1;
     let n = 0;
-    while (days.has(d)) { n++; d--; }
+    for (let guard = 0; guard < 3650; guard++) {
+      if (days.has(d)) n++;
+      else if (!freeDay(d)) break;
+      d--;
+    }
     return n;
+  }
+
+  /** Serie oben unter „Heute“. */
+  function streakLine(memberId) {
+    const n = streakDays(memberId);
+    if (!n) return '';
+    const today = S.today();
+    const doneToday = state.history.some((h) => h.day === today && !h.skipped && (!memberId || h.memberId === memberId));
+    const freeToday = memberId ? S.memberBudget(member(memberId), state.settings, today) === 0
+      : state.members.length ? state.members.every((x) => S.memberBudget(x, state.settings, today) === 0) : S.budgetFor(state.settings, today) === 0;
+    const hint = doneToday || freeToday ? '' : ' · heute dranbleiben!';
+    return `<p class="streak">🔥 <strong>${n} Tag${n === 1 ? '' : 'e'}</strong> Serie${hint}</p>`;
   }
 
   function viewTeam() {
