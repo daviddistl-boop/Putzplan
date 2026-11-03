@@ -8,6 +8,8 @@
 
   // Adresse der Supabase Edge Function für Push-Erinnerungen.
   const PUSH_API = 'https://nqopgnogbuidqtfwpsat.supabase.co/functions/v1/push';
+  // Pflanzenerkennung per Foto (Edge Function, fragt mit geheimem Schlüssel bei Pl@ntNet an).
+  const PLANT_ID_API = 'https://nqopgnogbuidqtfwpsat.supabase.co/functions/v1/plant-id';
 
   const DB_NAME = 'putzplan';
   const STORE = 'kv';
@@ -69,5 +71,5 @@
     return reminderMessages(state, S, 1)[0];
   }
 
-  root.PutzplanShared = { PUSH_API, kvGet, kvSet, reminderMessage, reminderMessages };
+  root.PutzplanShared = { PUSH_API, PLANT_ID_API, kvGet, kvSet, reminderMessage, reminderMessages };
 })(typeof self !== 'undefined' ? self : globalThis);

@@ -17,6 +17,14 @@ verteilt die Arbeit nach deinem Zeitbudget auf die Woche und sagt dir jeden Tag,
   (wird automatisch eingerichtet; für jede Aufgabe im Bearbeiten-Dialog frei festlegbar).
 - **Allergiker-Modus** – Hausstaubmilben, Pollen (nur in der Saison), Tierhaare oder Schimmel auswählen:
   Bettwäsche, Polster, Couch, Saugen & Co. werden öfter fällig (🤧), passende Zusatzaufgaben und Tipps kommen dazu.
+- **Pflanzen** (eigener Tab 🪴) – gegossen wird nach Bedarf statt nach festen Terminen. Die App schätzt,
+  wie schnell die Erde austrocknet, aus dem Steckbrief der Art (rund 70 Zimmer-, Balkon- und Gartenpflanzen),
+  Topfgröße und -material, Licht, Jahreszeit und deiner Rückmeldung beim Gießen („noch feucht / passt / ganz
+  trocken“ → Intervall ±15 % für genau diese Pflanze). Dazu Düngen (März–September) und Umtopfen (im Frühjahr).
+  Wasserspeicher-Töpfe wie Lechuza: 12 Wochen Angießphase von oben, danach Speicher auffüllen, jedes vierte Mal
+  zusätzlich von oben gießen. Draußen: kein Gießen nach Regen (ab 5 mm), früher bei über 28 °C, Frost-Hinweis
+  unter 2 °C (Wetter von Open-Meteo, Ort in den Einstellungen). Art per Foto erkennen (Pl@ntNet).
+  Pflanzenpflege zählt zum Zeitbudget, steht im Putz-Timer und bringt Punkte – oder als eigener Block unter „Heute“.
 - **Automatischer Wochenplan** – Aufgaben werden nach Dringlichkeit auf die nächsten 7 Tage verteilt.
   Ist ein Tag voll, rutscht der Rest auf den nächsten Tag; bleibt Zeit übrig, werden bald fällige Aufgaben vorgezogen.
 - **Zeitbudget pro Wochentag** – z. B. 20 Min. unter der Woche, 1 Std. am Samstag, Sonntag frei.
@@ -97,6 +105,17 @@ Supabase Cron (alle 5 Min.) ──► Edge Function „push“ ──► Push-Di
 - Code: `supabase/functions/push/index.ts` (Edge Function) und `supabase/migrations/` (Tabellen + Cron-Job).
 - Die Adresse der Funktion steht in `shared.js` (`PUSH_API`).
 
+## Pflanzenerkennung per Foto
+
+Die App schickt ein verkleinertes Foto an die Edge Function `supabase/functions/plant-id` (Adresse in `shared.js`,
+`PLANT_ID_API`). Die fragt mit einem geheimen Schlüssel bei [Pl@ntNet](https://my.plantnet.org) an – der
+Schlüssel steckt also nicht in der App. Fotos werden auf dem Server nicht gespeichert; auf dem Handy bleibt nur
+ein kleines Vorschaubild.
+
+Einrichten: Auf my.plantnet.org kostenlos registrieren, den API-Schlüssel kopieren und im Supabase-Dashboard
+(Projekt „Putzplan“ → *Edge Functions → Secrets*) als `PLANTNET_API_KEY` speichern. Ohne Schlüssel meldet die
+App „Foto-Erkennung noch nicht eingerichtet“, alles andere funktioniert normal.
+
 ## Tests
 
 ```bash
@@ -110,6 +129,9 @@ Jede Aufgabe hat ein Intervall und ein „zuletzt erledigt“-Datum. Daraus ergi
 Aufgaben gewählt, bis das Zeitbudget voll ist; die Simulation setzt sie dann als erledigt, sodass
 wiederkehrende Aufgaben im Wochenplan korrekt erneut auftauchen. Die Logik steckt in `scheduler.js`.
 
+Folgeaufgaben und Pflanzenpflege haben statt eines Intervalls einen festen Fälligkeitstag. Ab diesem Tag kommen sie
+immer dran, auch wenn das Zeitbudget voll ist. Den Tag der Pflanzenpflege berechnet `plants.js`.
+
 ## Dateien
 
 | Datei | Inhalt |
@@ -117,10 +139,11 @@ wiederkehrende Aufgaben im Wochenplan korrekt erneut auftauchen. Die Logik steck
 | `index.html` | Grundgerüst der App |
 | `app.js` | Oberfläche, Datenhaltung (localStorage), Dialoge |
 | `scheduler.js` | Planungslogik (Fälligkeit, Wochenplan, Verteilung auf Personen) |
+| `plants.js` | Pflanzen: Steckbriefe, Gieß-Berechnung, Wetter, Lernen aus der Rückmeldung |
 | `templates.js` | Raum- und Aufgabenvorlagen |
 | `styles.css` | Design inkl. Dark Mode |
 | `native.js` | Anbindung an die Android-App (lokale Erinnerungen, Sicherung, Teilen) |
 | `android/`, `capacitor.config.json` | Android-Projekt |
 | `shared.js` | Von App und Service Worker gemeinsam genutzt (IndexedDB, Erinnerungstext) |
 | `sw.js`, `manifest.webmanifest`, `icons/` | Offline-Unterstützung, Push-Empfang, Installation als App |
-| `supabase/` | Server für die täglichen Erinnerungen |
+| `supabase/` | Server für die täglichen Erinnerungen und die Pflanzenerkennung |

@@ -4,6 +4,7 @@
 
   const S = window.Scheduler;
   const T = window.Templates;
+  const P = window.Plants;
   const Shared = window.PutzplanShared;
   const Native = window.PutzplanNative || { isNative: false };
   const STORAGE_KEY = 'putzplan.v1';
@@ -19,6 +20,7 @@
       rooms: [],
       tasks: [],
       members: [],
+      plants: [],
       history: [],
       settings: { minutesPerWeekday: [20, 20, 20, 20, 20, 60, 0] },
     };
@@ -133,6 +135,7 @@
   function dueText(t) {
     if (t.paused) return 'Pausiert';
     if (t.season === 'pollen' && !S.isPollenSeason(S.today())) return 'Ruht bis zur Pollensaison 🌼';
+    if (t.plantId && (t.dueOn === null || t.dueOn === undefined)) return 'Winterpause ❄️';
     if (t.trigger && (t.dueOn === null || t.dueOn === undefined)) {
       const parent = task(t.trigger.afterTaskId);
       return parent ? `Kommt nach „${parent.name}“` : 'Wartet';
@@ -213,10 +216,14 @@
     state.history.push(entry);
     t.lastDone = day;
     t.snoozedUntil = null;
-    if (o.silent) return;
-    save();
-    render();
-    toast(`„${t.name}“ erledigt 🎉`, { label: 'Rückgängig', run: () => undoEntry(entry.id) });
+    if (t.plantId) plantCareDone(t, entry);
+    if (!o.silent) {
+      save();
+      render();
+      toast(`„${t.name}“ erledigt 🎉`, { label: 'Rückgängig', run: () => undoEntry(entry.id) });
+    }
+    // Nach dem Gießen kurz fragen, wie die Erde war – daraus lernt die App.
+    if (t.plantCare === 'water') setTimeout(() => plantFeedbackDialog(entry.id), o.silent ? 0 : 50);
   }
 
   function skipTask(taskId) {
@@ -261,7 +268,12 @@
         t.durations = h.prevDurations || undefined;
       }
     }
+    if (h.plantPrev) {
+      const p = plant(h.plantPrev.id);
+      if (p) Object.assign(p, h.plantPrev);
+    }
     state.history.splice(idx, 1);
+    if (h.plantPrev) syncPlants();
     const s = state.session;
     if (s && s.doneIds.includes(h.taskId) && h.day === S.today()) {
       s.doneIds = s.doneIds.filter((id) => id !== h.taskId);
@@ -393,7 +405,8 @@
     const exclude = new Set(excludeIds.concat(doneTodayIds()));
     return state.tasks
       .filter((t) => !t.paused && !t.archived && !exclude.has(t.id) && !S.robotHandles(t, state.settings)
-        && !(t.trigger && (t.dueOn === null || t.dueOn === undefined)))
+        && !(S.hasDueDate(t) && (t.dueOn === null || t.dueOn === undefined))
+        && !(t.plantId && !S.plantsInPlan(state.settings)))
       .sort((a, b) => S.urgency(b, today, undefined, state.settings) - S.urgency(a, today, undefined, state.settings));
   }
 
@@ -619,6 +632,7 @@
     if (moveOpen) {
       for (const id of open) {
         if (extra.has(id)) continue; // Zusatzaufgaben waren heute gar nicht geplant.
+        if (task(id).plantId) continue; // Pflanzen warten nicht – sie bleiben fällig.
         task(id).snoozedUntil = S.today() + 1;
         moved++;
       }
@@ -637,7 +651,7 @@
   function confirmEndSession() {
     const s = state.session;
     const extra = sessionExtraIds(s);
-    const open = sessionOpenIds(s).filter((id) => !extra.has(id));
+    const open = sessionOpenIds(s).filter((id) => !extra.has(id) && !task(id).plantId);
     if (!open.length) { endSession(false); return; }
     openModal(`
       <h2>Timer beenden?</h2>
@@ -731,7 +745,7 @@
 
     let banner = '';
     if (s.timeUp) {
-      const moveCount = open.filter((id) => !extra.has(id)).length;
+      const moveCount = open.filter((id) => !extra.has(id) && !task(id).plantId).length;
       banner = `<div class="session-banner ${moveCount ? 'warn' : 'good'}">
           <strong>⏰ Zeit um!</strong>
           <p>${s.doneIds.length} geschafft${moveCount ? ` · ${moveCount} wandert auf morgen` : ''}.</p>
@@ -764,12 +778,13 @@
         const t = task(id);
         const r = room(t.roomId);
         const isDone = doneSet.has(id);
-        const willMove = s.timeUp && !isDone && !extra.has(id);
+        const willMove = s.timeUp && !isDone && !extra.has(id) && !t.plantId;
         return `<li class="row ${isDone ? 'done' : ''}" data-action="session-toggle" data-id="${id}">
           <span class="check ${isDone ? 'checked' : ''}" aria-hidden="true">${isDone ? '✓' : ''}</span>
-          <span class="room-icon">${r ? r.icon : '🧽'}</span>
+          ${taskIcon(t, r)}
           <div class="row-main">
             <div class="row-title">${esc(t.name)}</div>
+            ${t.note ? `<div class="row-note">${esc(t.note)}</div>` : ''}
             <div class="row-sub">${r ? esc(r.name) : ''} ·
               ${isDone ? `in ${fmtClock(s.times[id] || 0)} Min.` : `ca. ${fmtMinutes(S.estimate(t))}`}
               ${bonus.has(id) ? '<span class="badge good">Bonus ✨</span>' : ''}
@@ -846,6 +861,7 @@
     }
 
     html += updateBanner();
+    html += frostHint();
 
     if (!isStandalone() && !state.settings.installHintDismissed) {
       html += `<div class="hint"><span>📲</span><div class="grow"><strong>Putzplan als App installieren</strong><br>
@@ -864,6 +880,8 @@
     } else {
       html += `<div class="empty big"><div class="emoji">🎉</div><p><strong>Alles sauber!</strong><br>Genieß deinen Tag.</p></div>`;
     }
+
+    html += todayPlantsBlock(doneIds);
 
     if (extra.length) {
       html += `<section><button class="link" data-action="toggle-more">${ui.showMore ? '▾' : '▸'} Ebenfalls fällig (${extra.length}) – passt nicht mehr ins heutige Zeitbudget</button>
@@ -891,9 +909,10 @@
     const overdue = S.dueDay(t, state.settings) < today;
     return `<li class="row">
       <button class="check" data-action="complete" data-id="${t.id}" data-member="${memberId || ''}" title="Erledigt"></button>
-      <span class="room-icon">${r ? r.icon : '🧽'}</span>
+      ${taskIcon(t, r)}
       <div class="row-main" data-action="task-menu" data-id="${t.id}" data-member="${memberId || ''}">
         <div class="row-title">${esc(t.name)}</div>
+        ${t.note ? `<div class="row-note">${esc(t.note)}</div>` : ''}
         <div class="row-sub">${r ? esc(r.name) : ''} · ${minutesLabel(t)}${allergyBoosted(t) || t.allergyKey ? ' · 🤧' : ''}
           ${overdue ? `<span class="badge bad">${dueText(t)}</span>` : ''}
           ${tag ? `<span class="badge">${tag}</span>` : ''}</div>
@@ -928,7 +947,7 @@
     const today = S.today();
     if (ui.roomId && room(ui.roomId)) return viewRoom(room(ui.roomId));
     const cards = state.rooms.map((r) => {
-      const tasks = state.tasks.filter((t) => t.roomId === r.id && !t.archived);
+      const tasks = state.tasks.filter((t) => t.roomId === r.id && !t.archived && !t.plantId);
       const pct = S.roomCleanliness(tasks, today, state.settings);
       const due = tasks.filter((t) => S.isPlannable(t, today, state.settings) && S.urgency(t, today, undefined, state.settings) >= 1).length;
       return `<button class="room-card" data-action="open-room" data-id="${r.id}">
@@ -951,7 +970,7 @@
 
   function viewRoom(r) {
     const today = S.today();
-    const tasks = state.tasks.filter((t) => t.roomId === r.id && !t.archived)
+    const tasks = state.tasks.filter((t) => t.roomId === r.id && !t.archived && !t.plantId)
       .sort((a, b) => S.dueDay(a, state.settings) - S.dueDay(b, state.settings));
     const pct = S.roomCleanliness(tasks, today, state.settings);
     return `
@@ -961,6 +980,7 @@
           <button class="icon-btn" data-action="edit-room" data-id="${r.id}" title="Raum bearbeiten">✎</button></div>
         <div class="bar"><span style="width:${pct}%;background:${cleanlinessColor(pct)}"></span></div>
         <p class="muted">${pct}% sauber</p>
+        ${plantsInRoomHint(r)}
       </header>
       <ul class="list">${tasks.map((t) => {
         const u = S.urgency(t, today, undefined, state.settings);
@@ -1045,6 +1065,7 @@
       ${updateCard()}
       ${installCard()}
       ${reminderCard()}
+      ${plantsCard()}
       ${robotCard()}
       ${allergyCard()}
       <section class="card">
@@ -1143,14 +1164,14 @@
     const others = state.members.filter((m) => m.id !== memberId);
     openModal(`
       <h2>${esc(t.name)}</h2>
-      <p class="muted">${dueText(t)} · ${intervalLabel(t.interval)}</p>
+      <p class="muted">${dueText(t)} · ${t.plantId ? `zurzeit ${intervalLabel(t.interval)}` : intervalLabel(t.interval)}</p>
       <div class="menu">
         <button data-m="done">✅ Erledigt${member(memberId) ? ` (${esc(member(memberId).name)})` : ''}</button>
         ${others.map((m) => `<button data-m="done-by" data-member="${m.id}">✅ Erledigt von ${esc(m.name)}</button>`).join('')}
         <button data-m="snooze1">⏰ Auf morgen verschieben</button>
         <button data-m="snooze3">⏰ Um 3 Tage verschieben</button>
-        <button data-m="skip">⏭️ Diesmal überspringen</button>
-        <button data-m="edit">✎ Bearbeiten</button>
+        ${t.plantId ? '' : '<button data-m="skip">⏭️ Diesmal überspringen</button>'}
+        <button data-m="edit">✎ ${t.plantId ? 'Pflanze bearbeiten' : 'Bearbeiten'}</button>
         <button data-m="cancel" class="muted">Abbrechen</button>
       </div>`, (el) => {
       el.querySelectorAll('[data-m]').forEach((b) => {
@@ -1180,6 +1201,7 @@
   }
 
   function editTask(taskId, roomId) {
+    if (taskId && task(taskId) && task(taskId).plantId) { editPlant(task(taskId).plantId); return; }
     const t = taskId ? task(taskId) : { name: '', interval: 7, minutes: 10, roomId, assignee: null, paused: false };
     const presetMatch = T.INTERVALS.some(([d]) => d === t.interval);
     openModal(`
@@ -1305,6 +1327,9 @@
         if (!confirm(`„${r.name}“ und alle Aufgaben darin löschen?`)) return;
         state.rooms = state.rooms.filter((x) => x.id !== roomId);
         state.tasks = state.tasks.filter((t) => t.roomId !== roomId);
+        // Pflanzen bleiben erhalten – sie stehen danach ohne Raum da.
+        (state.plants || []).forEach((p) => { if (p.roomId === roomId) p.roomId = null; });
+        syncPlants();
         ui.roomId = null;
         save(); closeModal(); render();
       };
@@ -1442,6 +1467,675 @@
           : `<button class="btn block" data-action="update-check" ${upd.checking ? 'disabled' : ''}>${upd.checking ? 'Suche …' : 'Nach Updates suchen'}</button>`}
         <p class="muted small">Updates werden einfach über die installierte App installiert – deine Daten bleiben erhalten.</p>
       </section>`;
+  }
+
+  // ---------------------------------------------------------------- Pflanzen
+  //
+  // Jede Pflanze bekommt Pflegeaufgaben (Gießen, Düngen, Umtopfen) als normale Aufgaben
+  // mit festem Fälligkeitstag. Den Tag berechnet das Pflanzen-Modul aus Art, Topf, Licht,
+  // Jahreszeit, Wetter und der gelernten Rückmeldung. So erscheinen Pflanzen unter „Heute“,
+  // im Putz-Timer und in der Rangliste – oder, wenn man das ausschaltet, als eigener Block.
+
+  const plant = (id) => byId(state.plants || [], id);
+  // Diese Werte ändert das Abhaken – für „Rückgängig“ werden sie gesichert.
+  const PLANT_STATE_KEYS = ['lastWatered', 'lastFed', 'repottedOn', 'refills', 'learn', 'waterNotBefore'];
+  const WEATHER_EVERY_MS = 3 * 3600 * 1000;
+  const CARE_ICONS = { water: '💧', feed: '🌱', repot: '🪴' };
+  let weatherBusy = false;
+
+  function plantsSettings() {
+    if (!state.settings.plants) state.settings.plants = { inPlan: true, location: null, weather: null };
+    return state.settings.plants;
+  }
+
+  /** Aktuelles Wetter am eingestellten Ort – nur wenn es nicht zu alt ist. */
+  function plantWeather() {
+    const w = plantsSettings().weather;
+    return w && Date.now() - w.at < 12 * 3600 * 1000 ? w : null;
+  }
+
+  /** Pauschale Gieß-Aufgaben aus den Vorlagen („Pflanzen gießen“, „Zimmerpflanzen gießen“). */
+  function isGenericWatering(t) {
+    return !t.plantId && /pflanz/i.test(t.name) && /gie(ß|ss)en/i.test(t.name);
+  }
+
+  /** Aufgaben der Pflanzen anlegen bzw. aktualisieren (Fälligkeit, Name, Hinweis). */
+  function syncPlants() {
+    if (!Array.isArray(state.plants)) state.plants = [];
+    const day = S.today();
+    const weather = plantWeather();
+    const live = new Set();
+    for (const p of state.plants) {
+      for (const c of P.careTasks(p, day, weather)) {
+        let t = state.tasks.find((x) => x.plantId === p.id && x.plantCare === c.care);
+        if (!t) {
+          t = { id: uid(), plantId: p.id, plantCare: c.care, minutes: c.minutes, lastDone: null, assignee: null, paused: false, snoozedUntil: null };
+          state.tasks.push(t);
+        }
+        Object.assign(t, { roomId: p.roomId, name: c.name, note: c.note, dueOn: c.dueOn, interval: c.interval });
+        live.add(t.id);
+      }
+    }
+    state.tasks = state.tasks.filter((t) => !t.plantId || live.has(t.id));
+    // Solange es eigene Pflanzen gibt, ruhen die pauschalen Gieß-Aufgaben.
+    const has = state.plants.length > 0;
+    for (const t of state.tasks) {
+      if (!isGenericWatering(t)) continue;
+      if (has && !t.paused) { t.paused = true; t.pausedByPlants = true; }
+      if (!has && t.pausedByPlants) { t.paused = false; delete t.pausedByPlants; }
+    }
+  }
+
+  /** Nach dem Abhaken einer Pflegeaufgabe: Pflanze aktualisieren (Zustand vorher für „Rückgängig“ merken). */
+  function plantCareDone(t, entry) {
+    const p = plant(t.plantId);
+    if (!p) return;
+    entry.plantPrev = { id: p.id };
+    for (const k of PLANT_STATE_KEYS) entry.plantPrev[k] = p[k] === undefined ? null : p[k];
+    const day = entry.day;
+    if (t.plantCare === 'water') {
+      if (P.waterMode(p, day) === 'reservoir') p.refills = (p.refills || 0) + 1;
+      p.lastWatered = day;
+      p.waterNotBefore = null;
+    }
+    if (t.plantCare === 'feed') p.lastFed = day;
+    if (t.plantCare === 'repot') {
+      p.repottedOn = day;
+      // Frische Erde hat genug Nährstoffe – erst nach etwa 6 Wochen wieder düngen.
+      const feed = P.careTasks(p, day, null).find((c) => c.care === 'feed');
+      if (feed) p.lastFed = Math.max(typeof p.lastFed === 'number' ? p.lastFed : -Infinity, day + 42 - feed.interval);
+    }
+    syncPlants();
+  }
+
+  /** Nächster Termin einer Pflegeaufgabe (null = ruht). */
+  function plantTaskDue(t) {
+    if (!t || t.paused || t.dueOn === null || t.dueOn === undefined) return null;
+    return Math.max(t.dueOn, t.snoozedUntil || -Infinity);
+  }
+
+  function relDue(day) {
+    if (day === null) return 'Pause';
+    const diff = day - S.today();
+    if (diff < 0) return 'überfällig';
+    if (diff === 0) return 'heute';
+    if (diff === 1) return 'morgen';
+    if (diff <= 30) return `in ${diff} Tagen`;
+    const d = S.dayToDate(day);
+    return `ab ${d.toLocaleDateString('de-DE', { month: 'long' })}${d.getFullYear() !== new Date().getFullYear() ? ` ${d.getFullYear()}` : ''}`;
+  }
+
+  function plantTasks(p) {
+    return state.tasks.filter((t) => t.plantId === p.id);
+  }
+
+  /** Symbol einer Aufgabe in Listen: Foto der Pflanze, sonst das Raum-Symbol. */
+  function taskIcon(t, r) {
+    const p = t.plantId && plant(t.plantId);
+    if (p && p.photo) return `<img class="room-icon plant-thumb" src="${p.photo}" alt="">`;
+    return `<span class="room-icon">${r ? r.icon : t.plantId ? '🪴' : '🧽'}</span>`;
+  }
+
+  function plantsInRoomHint(r) {
+    const n = (state.plants || []).filter((p) => p.roomId === r.id).length;
+    return n ? `<button class="link" data-action="go" data-tab="plants">🪴 ${n} Pflanze${n === 1 ? '' : 'n'} – im Tab „Pflanzen“</button>` : '';
+  }
+
+  /** Draußen-Pflanzen, für die heute Nacht Frost droht. */
+  function frostHint() {
+    const w = plantWeather();
+    const outdoor = (state.plants || []).filter((p) => P.isOutdoor(p) && !p.paused);
+    if (!outdoor.length || !P.frostWarning(w)) return '';
+    const names = outdoor.slice(0, 4).map((p) => esc(p.name)).join(', ') + (outdoor.length > 4 ? ' …' : '');
+    return `<div class="hint frost"><span>❄️</span><div class="grow"><strong>Frost: bis ${Math.round(w.tmin)} °C</strong><br>
+      <span class="muted small">Draußen: ${names} – reinholen oder abdecken.</span></div></div>`;
+  }
+
+  /** Eigener Block unter „Heute“, wenn Pflanzen nicht zum Putzplan zählen. */
+  function todayPlantsBlock(doneIds) {
+    if (S.plantsInPlan(state.settings)) return '';
+    const today = S.today();
+    const due = state.tasks.filter((t) => t.plantId && !doneIds.has(t.id) && S.isActive(t, today) && t.dueOn !== null && t.dueOn !== undefined && t.dueOn <= today);
+    if (!due.length) return '';
+    return `<section><h2>🪴 Pflanzen</h2><ul class="list">${due.map((t) => taskRow(t, t.assignee)).join('')}</ul></section>`;
+  }
+
+  // Texte der Rückmeldung je nachdem, wie gegossen wird.
+  const FEEDBACK_TEXTS = {
+    top: { q: 'Wie war die Erde vor dem Gießen?', skip: '🌊 Noch feucht – hab nicht gegossen', wet: '🌊 Noch feucht – trotzdem gegossen', ok: '👍 Oben trocken – passt', dry: '🏜️ Schon ganz trocken' },
+    reservoir: { q: 'Wie stand die Wasserstandsanzeige?', skip: '🌊 Noch nicht leer – nicht aufgefüllt', wet: '🌊 Noch nicht leer – trotzdem aufgefüllt', ok: '👍 Leer – passt', dry: '🏜️ War schon länger leer', tip: 'Tipp: Steht die Anzeige auf „min.“, ruhig ein paar Tage warten, bevor du nachfüllst – dann bekommen die Wurzeln Luft.' },
+    wick: { q: 'Wie voll war der Wasservorrat?', skip: '🌊 Noch nicht leer – nicht nachgefüllt', wet: '🌊 Noch nicht leer – trotzdem nachgefüllt', ok: '👍 Fast leer – passt', dry: '🏜️ Ganz leer' },
+  };
+
+  /** Fragt nach dem Gießen, wie die Erde war – daraus lernt die App das Intervall dieser Pflanze. */
+  function plantFeedbackDialog(entryId) {
+    const h = state.history.find((x) => x.id === entryId);
+    const t = h && task(h.taskId);
+    const p = t && plant(t.plantId);
+    if (!p || document.querySelector('#modal-root .modal')) return;
+    const mode = P.waterMode(p, h.day);
+    const tx = FEEDBACK_TEXTS[mode] || FEEDBACK_TEXTS.top;
+    openModal(`
+      <h2>💧 ${esc(p.name)}</h2>
+      <p class="muted">${tx.q}</p>
+      <div class="menu">
+        <button data-fb="ok">${tx.ok}</button>
+        <button data-fb="wet">${tx.wet}</button>
+        <button data-fb="skip">${tx.skip}</button>
+        <button data-fb="dry">${tx.dry}</button>
+        <button data-fb="none" class="muted">Überspringen</button>
+      </div>
+      ${tx.tip ? `<p class="small muted">${tx.tip}</p>` : ''}
+      <p class="small muted">Deine Antwort passt das Intervall nur für diese Pflanze an – mit der Zeit wird es immer genauer.</p>`, (el) => {
+      el.querySelectorAll('[data-fb]').forEach((b) => {
+        b.onclick = () => { closeModal(); plantFeedback(entryId, p.id, b.dataset.fb); };
+      });
+    });
+  }
+
+  function plantFeedback(entryId, plantId, value) {
+    const p = plant(plantId);
+    if (!p || value === 'none') return;
+    const today = S.today();
+    if (value === 'skip') {
+      // Nicht gegossen: Abhaken zurücknehmen, öfter nachsehen ist unnötig – Intervall verlängern.
+      const h = state.history.find((x) => x.id === entryId);
+      undoEntry(entryId, true);
+      const s = state.session;
+      if (s && h) {
+        s.taskIds = s.taskIds.filter((id) => id !== h.taskId);
+        if (!sessionOpenIds(s).length && !s.timeUp) s.allDone = !addBonusTask(true);
+      }
+      P.applyFeedback(p, 'wet');
+      const days = P.recheckDays(p, today);
+      p.waterNotBefore = today + days;
+      syncPlants();
+      save();
+      render();
+      toast(`Alles klar – ${p.name} kommt ${days === 1 ? 'morgen' : `in ${days} Tagen`} wieder dran 🌊`);
+      return;
+    }
+    P.applyFeedback(p, value);
+    syncPlants();
+    save();
+    render();
+    const water = plantTasks(p).find((t) => t.plantCare === 'water');
+    const next = water ? relDue(plantTaskDue(water)) : '';
+    const msg = { wet: 'Wird künftig etwas seltener gegossen', dry: 'Wird künftig etwas öfter gegossen', ok: 'Danke!' }[value];
+    toast(`${msg}${next ? ` · nächstes Mal ${next}` : ''}`);
+  }
+
+  // ------------------------------------------------ Ansicht „Pflanzen“
+
+  function viewPlants() {
+    const today = S.today();
+    const plants = (state.plants || []).slice();
+    const nextDue = (p) => Math.min(...plantTasks(p).map((t) => plantTaskDue(t) ?? Infinity));
+    plants.sort((a, b) => nextDue(a) - nextDue(b) || a.name.localeCompare(b.name, 'de'));
+    const dueCount = plants.filter((p) => nextDue(p) <= today).length;
+    const ps = plantsSettings();
+    const hasOutdoor = plants.some(P.isOutdoor);
+    const w = plantWeather();
+
+    let html = `<header class="page-head"><h1>Pflanzen</h1>
+      <p class="muted">${plants.length ? `${plants.length} Pflanze${plants.length === 1 ? '' : 'n'}${dueCount ? ` · <strong class="bad-text">${dueCount} brauch${dueCount === 1 ? 't' : 'en'} heute etwas</strong>` : ' · alle versorgt 🌿'}` : 'Gießen nach Bedarf statt nach festen Terminen.'}</p></header>`;
+
+    if (hasOutdoor && !ps.location) {
+      html += `<div class="hint"><span>🌦️</span><div class="grow"><strong>Wetter für Balkon & Garten</strong><br>
+        <span class="muted small">Trag deinen Ort ein – nach Regen fällt das Gießen dann aus, bei Hitze wird früher gegossen.</span></div>
+        <button class="btn primary" data-action="go" data-tab="settings">Ort</button></div>`;
+    } else if (hasOutdoor && w) {
+      html += `<p class="small muted weather-line">📍 ${esc(ps.location.name)} · 🌧️ ${String(w.rain24).replace('.', ',')} mm in 24 Std. · 🌡️ bis ${Math.round(w.tmax)} °C, nachts ${Math.round(w.tmin)} °C</p>`;
+    }
+    html += frostHint();
+
+    if (!plants.length) {
+      html += `<div class="empty big"><div class="emoji">🪴</div>
+        <p><strong>Noch keine Pflanzen</strong><br>Leg deine Pflanzen an – per Foto erkennt die App die Art.
+        Die App rechnet aus, wann jede Pflanze Wasser, Dünger oder einen neuen Topf braucht.</p>
+        <button class="btn primary" data-action="add-plant">＋ Erste Pflanze anlegen</button></div>`;
+      return html;
+    }
+
+    html += `<ul class="list">${plants.map((p) => {
+      const sp = P.species(p.species);
+      const r = room(p.roomId);
+      const tasks = plantTasks(p).sort((a, b) => ['water', 'feed', 'repot'].indexOf(a.plantCare) - ['water', 'feed', 'repot'].indexOf(b.plantCare));
+      const dueTasks = tasks.filter((t) => { const d = plantTaskDue(t); return d !== null && d <= today; });
+      const chips = tasks.map((t) => {
+        const d = plantTaskDue(t);
+        const late = d !== null && d <= today;
+        return `<span class="badge ${late ? 'bad' : ''}">${CARE_ICONS[t.plantCare]} ${relDue(d)}</span>`;
+      }).join('');
+      return `<li class="row plant-row ${p.paused ? 'paused' : ''}">
+        ${p.photo ? `<img class="plant-photo-sm" src="${p.photo}" alt="">` : `<span class="plant-photo-sm empty-photo">🪴</span>`}
+        <div class="row-main" data-action="edit-plant" data-id="${p.id}">
+          <div class="row-title">${esc(p.name)}</div>
+          <div class="row-sub">${p.name !== sp.name ? `${esc(sp.name)} · ` : ''}${r ? `${r.icon} ${esc(r.name)}` : ''}${P.isOutdoor(p) ? ' · draußen' : ''}</div>
+          <div class="row-sub care-chips">${chips}</div>
+          ${dueTasks.length ? `<div class="care-actions">${dueTasks.map((t) => `<button class="btn small-btn" data-action="complete" data-id="${t.id}" data-member="${t.assignee || ''}">✓ ${CARE_ICONS[t.plantCare]} ${esc(careVerb(t))}</button>`).join('')}</div>` : ''}
+        </div>
+      </li>`;
+    }).join('')}</ul>
+      <button class="btn primary block" data-action="add-plant">＋ Pflanze hinzufügen</button>
+      <p class="muted small center">Tipp: Tippe nach dem Gießen kurz an, wie feucht die Erde war – so lernt die App jede Pflanze kennen.</p>`;
+    return html;
+  }
+
+  function careVerb(t) {
+    if (t.plantCare === 'feed') return 'Gedüngt';
+    if (t.plantCare === 'repot') return 'Umgetopft';
+    if (/Wasserspeicher/.test(t.name)) return 'Aufgefüllt';
+    if (/nachfüllen/.test(t.name)) return 'Nachgefüllt';
+    return 'Gegossen';
+  }
+
+  // ------------------------------------------------ Pflanze anlegen / bearbeiten
+
+  let plantDraft = null;
+
+  const OUTDOOR_RE = /balkon|garten|terrasse|draußen|draussen|hof|loggia/i;
+
+  function defaultPlantRoom() {
+    const rooms = state.rooms.filter((r) => !r.robot);
+    const living = rooms.find((r) => /wohn/i.test(r.name));
+    return (living || rooms[0] || { id: 'new:indoor' }).id;
+  }
+
+  function editPlant(plantId) {
+    const p = plantId ? plant(plantId) : null;
+    const today = S.today();
+    plantDraft = p ? {
+      id: p.id, name: p.name, nameTouched: true, species: p.species, speciesTouched: true, query: '',
+      roomId: p.roomId || defaultPlantRoom(), location: p.location || 'indoor', light: p.light, size: p.size, pot: p.pot,
+      fresh: P.inRampUp(p, today), customWater: p.customWater || '', photo: p.photo || null, paused: !!p.paused,
+    } : {
+      id: null, name: '', nameTouched: false, species: 'other', speciesTouched: false, query: '',
+      roomId: defaultPlantRoom(), location: 'indoor', light: 'eastwest', size: 'm', pot: 'plastic',
+      fresh: false, last: 'some', customWater: '', photo: null,
+    };
+    if (!p) plantDraft.location = OUTDOOR_RE.test((room(plantDraft.roomId) || {}).name || '') ? 'outdoor' : 'indoor';
+    renderPlantDialog();
+  }
+
+  /** Vorschau: so oft wird mit den aktuellen Angaben gegossen. */
+  function draftAsPlant(d) {
+    const p = d.id ? plant(d.id) : null;
+    return Object.assign({}, p || { learn: 1 }, {
+      species: d.species, location: d.location, light: d.light, size: d.size, pot: d.pot,
+      customWater: parseInt(d.customWater, 10) || undefined,
+      plantedOn: d.pot === 'reservoir' && d.fresh ? (p && typeof p.plantedOn === 'number' && P.inRampUp(p, S.today()) ? p.plantedOn : S.today()) : undefined,
+    });
+  }
+
+  function roomOptions(d) {
+    const rooms = state.rooms.filter((r) => !r.robot);
+    const opts = rooms.map((r) => `<option value="${r.id}" ${r.id === d.roomId ? 'selected' : ''}>${r.icon} ${esc(r.name)}</option>`);
+    if (!rooms.length) opts.push(`<option value="new:indoor" ${d.roomId === 'new:indoor' ? 'selected' : ''}>🪴 Wohnung (neu)</option>`);
+    if (!rooms.some((r) => /balkon/i.test(r.name))) opts.push(`<option value="new:balcony" ${d.roomId === 'new:balcony' ? 'selected' : ''}>🌿 Balkon (neu)</option>`);
+    if (!rooms.some((r) => /garten/i.test(r.name))) opts.push(`<option value="new:garden" ${d.roomId === 'new:garden' ? 'selected' : ''}>🌳 Garten (neu)</option>`);
+    return opts.join('');
+  }
+
+  function speciesResults(d) {
+    if (!d.query.trim()) return '';
+    const matches = P.search(d.query).slice(0, 8);
+    if (!matches.length) return '<p class="small muted">Nichts gefunden – wähle „Andere Pflanze“ und stell das Intervall unten selbst ein.</p>';
+    return `<div class="chip-grid">${matches.map((m) => `<button type="button" class="chip ${m.key === d.species ? 'on' : ''}" data-species="${m.key}">${esc(m.name)}</button>`).join('')}</div>`;
+  }
+
+  function identifyBlock(d) {
+    const id = d.ident;
+    if (!id) return '';
+    if (id.busy) return '<p class="small muted">🔍 Erkenne die Pflanze …</p>';
+    if (id.error) return `<p class="small bad-text">${esc(id.error)}</p>`;
+    if (!id.results.length) return '<p class="small muted">Keine Pflanze erkannt – versuch ein Foto, auf dem Blätter oder Blüten gut zu sehen sind.</p>';
+    return `<p class="small muted">Erkannt – tippe auf die richtige Art:</p>
+      <div class="menu ident-list">${id.results.map((r, i) => `
+        <button type="button" data-ident="${i}" class="${r.match && r.match.key === d.species ? 'on' : ''}">
+          <strong>${esc(r.commonNames[0] || r.scientificName)}</strong> <span class="muted small">${Math.round(r.score * 100)} %</span><br>
+          <span class="small muted"><em>${esc(r.scientificName)}</em> · ${r.match ? `Steckbrief: ${esc(r.match.name)}` : 'nicht in den Steckbriefen – Standard-Profil'}</span>
+        </button>`).join('')}</div>`;
+  }
+
+  function renderPlantDialog() {
+    const d = plantDraft;
+    if (!d) return;
+    const today = S.today();
+    const sp = P.species(d.species);
+    const outdoor = d.location === 'outdoor';
+    const preview = P.waterInterval(draftAsPlant(d), today, outdoor ? plantWeather() : null);
+    const lights = P.LIGHTS.filter((l) => !(outdoor && l.indoorOnly));
+    const existing = d.id ? plant(d.id) : null;
+    const learned = existing && existing.learn && Math.abs(existing.learn - 1) > 0.01 ? existing.learn : null;
+    const prevScroll = (document.querySelector('#modal-root .modal') || {}).scrollTop || 0;
+    const chip = (attr, val, cur, label) => `<button type="button" class="chip ${val === cur ? 'on' : ''}" ${attr}="${val}">${label}</button>`;
+
+    openModal(`
+      <h2>${d.id ? 'Pflanze bearbeiten' : 'Neue Pflanze'}</h2>
+      <div class="form">
+        <div class="plant-photo">
+          ${d.photo ? `<img src="${d.photo}" alt="">` : '<div class="plant-photo-empty">🪴</div>'}
+          <div class="photo-btns">
+            <label class="btn">📷 Foto aufnehmen<input type="file" accept="image/*" capture="environment" hidden data-photo></label>
+            <label class="btn">🖼️ Aus der Galerie<input type="file" accept="image/*" hidden data-photo></label>
+            ${d.blob ? `<button type="button" class="btn" data-identify ${d.ident && d.ident.busy ? 'disabled' : ''}>🔍 Art erkennen</button>` : ''}
+          </div>
+        </div>
+        ${identifyBlock(d)}
+        <label>Art<input class="input" type="search" data-species-q value="${esc(d.query)}" placeholder="🔍 Suchen, z. B. Monstera oder Ficus"></label>
+        <div data-species-results>${speciesResults(d)}</div>
+        <p class="small species-pick">Gewählt: <strong>${esc(sp.name)}</strong>${sp.latin ? ` <em class="muted">${esc(sp.latin)}</em>` : ''}
+          ${d.species !== 'other' ? '<button type="button" class="link" data-species="other">Andere Pflanze</button>' : ''}</p>
+        <label>Name<input class="input" data-plant-name value="${esc(d.name)}" placeholder="${esc(sp.name)}"></label>
+        <label>Standort<select class="input" data-plant-room>${roomOptions(d)}</select></label>
+        <label class="check-label"><input type="checkbox" data-plant-outdoor ${outdoor ? 'checked' : ''}> Steht draußen (Regen, Hitze & Frost berücksichtigen)</label>
+        <div><span class="field-label">Licht</span>
+          <div class="chip-grid">${lights.map((l) => chip('data-plant-light', l.key, d.light, outdoor ? (l.outName || l.name) : l.name)).join('')}</div></div>
+        <div><span class="field-label">Topfgröße</span>
+          <div class="chip-grid">${P.POT_SIZES.map((s) => chip('data-plant-size', s.key, d.size, s.name)).join('')}</div></div>
+        <label>Topf<select class="input" data-plant-pot>${P.POT_TYPES.map((t) => `<option value="${t.key}" ${t.key === d.pot ? 'selected' : ''}>${t.name}</option>`).join('')}</select></label>
+        ${d.pot === 'reservoir' ? `<p class="small muted">Topf mit eingebautem Wasserbecken und Wasserstandsanzeige. Du füllst den Speicher auf, die Erde zieht sich das Wasser selbst.
+            Jedes vierte Mal zusätzlich von oben gießen – das spült Salze aus.</p>
+          <label class="check-label"><input type="checkbox" data-plant-fresh ${d.fresh ? 'checked' : ''}> Frisch eingepflanzt – die ersten 12 Wochen von oben gießen (Angießphase)</label>` : ''}
+        ${d.pot === 'wick' ? '<p class="small muted">Ein Docht oder Tonkegel zieht Wasser aus einem Vorrat in die Erde. Du füllst den Vorrat auf, nicht die Erde.</p>' : ''}
+        ${d.id ? '' : `<div><span class="field-label">Zuletzt gegossen</span>
+          <div class="chip-grid">${[['today', 'Heute'], ['some', 'Vor ein paar Tagen'], ['unknown', 'Weiß nicht']].map(([v, l]) => chip('data-plant-last', v, d.last, l)).join('')}</div></div>`}
+        <details class="follow" ${d.customWater ? 'open' : ''}>
+          <summary>Eigenes Grundintervall (optional)</summary>
+          <p class="small muted">Steckbrief: alle ${sp.water} Tage im Sommer. Leer lassen, um den Steckbrief zu nutzen.</p>
+          <label>Im Sommer alle … Tage gießen<input class="input" type="number" min="1" max="60" data-plant-custom value="${esc(d.customWater)}" placeholder="${sp.water}"></label>
+        </details>
+        <p class="small learned">💧 Mit diesen Angaben: zurzeit <strong>${intervalLabel(preview)}</strong> ${P.waterMode(draftAsPlant(d), today) === 'reservoir' ? 'Speicher auffüllen' : P.waterMode(draftAsPlant(d), today) === 'wick' ? 'Vorrat nachfüllen' : 'gießen'}.
+          ${learned ? `<br>🎓 Aus deinen Rückmeldungen gelernt: ${learned > 1 ? `${Math.round((learned - 1) * 100)} % seltener` : `${Math.round((1 - learned) * 100)} % öfter`} als im Steckbrief.` : ''}</p>
+        ${d.id ? `<label class="check-label"><input type="checkbox" data-plant-paused ${d.paused ? 'checked' : ''}> Pausieren (z. B. Pflanze ist bei Freunden in Pflege)</label>` : ''}
+        <div class="btn-row">
+          ${d.id ? '<button type="button" class="btn danger" data-del>Löschen</button>' : ''}
+          <button type="button" class="btn" data-cancel>Abbrechen</button>
+          <button type="button" class="btn primary" data-save>Speichern</button>
+        </div>
+      </div>`, (el) => {
+      el.scrollTop = prevScroll;
+      const rerender = () => renderPlantDialog();
+      el.querySelectorAll('[data-photo]').forEach((inp) => {
+        inp.onchange = () => { if (inp.files && inp.files[0]) choosePlantPhoto(inp.files[0]); };
+      });
+      const idBtn = el.querySelector('[data-identify]');
+      if (idBtn) idBtn.onclick = () => identifyDraft();
+      el.querySelectorAll('[data-ident]').forEach((b) => {
+        b.onclick = () => {
+          const r = d.ident.results[+b.dataset.ident];
+          pickSpecies(r.match ? r.match.key : 'other', r.commonNames[0] || r.scientificName);
+          rerender();
+        };
+      });
+      // Suche: nur die Trefferliste neu zeichnen, damit Fokus und Tastatur bleiben.
+      const q = el.querySelector('[data-species-q]');
+      const results = el.querySelector('[data-species-results]');
+      q.oninput = () => { d.query = q.value; results.innerHTML = speciesResults(d); };
+      el.addEventListener('click', (ev) => {
+        const b = ev.target.closest('[data-species]');
+        if (!b) return;
+        pickSpecies(b.dataset.species);
+        d.query = '';
+        rerender();
+      });
+      el.querySelector('[data-plant-name]').oninput = (ev) => { d.name = ev.target.value; d.nameTouched = !!ev.target.value.trim(); };
+      el.querySelector('[data-plant-room]').onchange = (ev) => {
+        d.roomId = ev.target.value;
+        const name = ev.target.value === 'new:balcony' ? 'Balkon' : ev.target.value === 'new:garden' ? 'Garten' : (room(ev.target.value) || {}).name || '';
+        d.location = OUTDOOR_RE.test(name) ? 'outdoor' : 'indoor';
+        if (d.location === 'outdoor' && d.light === 'room') d.light = 'eastwest';
+        rerender();
+      };
+      el.querySelector('[data-plant-outdoor]').onchange = (ev) => {
+        d.location = ev.target.checked ? 'outdoor' : 'indoor';
+        if (d.location === 'outdoor' && d.light === 'room') d.light = 'eastwest';
+        rerender();
+      };
+      el.querySelectorAll('[data-plant-light]').forEach((b) => { b.onclick = () => { d.light = b.dataset.plantLight; rerender(); }; });
+      el.querySelectorAll('[data-plant-size]').forEach((b) => { b.onclick = () => { d.size = b.dataset.plantSize; rerender(); }; });
+      el.querySelectorAll('[data-plant-last]').forEach((b) => { b.onclick = () => { d.last = b.dataset.plantLast; rerender(); }; });
+      el.querySelector('[data-plant-pot]').onchange = (ev) => { d.pot = ev.target.value; rerender(); };
+      const fresh = el.querySelector('[data-plant-fresh]');
+      if (fresh) fresh.onchange = () => { d.fresh = fresh.checked; rerender(); };
+      const custom = el.querySelector('[data-plant-custom]');
+      custom.onchange = () => { d.customWater = custom.value; rerender(); };
+      const paused = el.querySelector('[data-plant-paused]');
+      if (paused) paused.onchange = () => { d.paused = paused.checked; };
+      el.querySelector('[data-cancel]').onclick = () => { plantDraft = null; closeModal(); };
+      el.querySelector('[data-save]').onclick = savePlant;
+      const del = el.querySelector('[data-del]');
+      if (del) del.onclick = () => {
+        if (!confirm(`„${d.name}“ wirklich löschen?`)) return;
+        state.plants = state.plants.filter((x) => x.id !== d.id);
+        syncPlants();
+        plantDraft = null;
+        save(); closeModal(); render();
+      };
+    });
+  }
+
+  function pickSpecies(key, suggestedName) {
+    const d = plantDraft;
+    d.species = key;
+    d.speciesTouched = true;
+    const sp = P.species(key);
+    if (!d.nameTouched) d.name = key === 'other' && suggestedName ? suggestedName : sp.name;
+    if (sp.out && !d.id && d.location === 'indoor' && !OUTDOOR_RE.test((room(d.roomId) || {}).name || '')) {
+      // Typische Balkonpflanze – Standort nur vorschlagen, nicht erzwingen.
+      toast(`${sp.name} steht meist draußen – Standort prüfen 🌿`);
+    }
+  }
+
+  function roomForPlant(roomId) {
+    const make = (name, icon) => {
+      let r = state.rooms.find((x) => x.name.toLowerCase() === name.toLowerCase());
+      if (!r) { r = { id: uid(), name, icon }; state.rooms.push(r); }
+      return r.id;
+    };
+    if (roomId === 'new:balcony') return make('Balkon', '🌿');
+    if (roomId === 'new:garden') return make('Garten', '🌳');
+    if (roomId === 'new:indoor') return make('Wohnung', '🪴');
+    return roomId;
+  }
+
+  function savePlant() {
+    const d = plantDraft;
+    const today = S.today();
+    const sp = P.species(d.species);
+    const p = d.id ? plant(d.id) : { id: uid(), createdOn: today, learn: 1 };
+    const tmp = draftAsPlant(d);
+    Object.assign(p, {
+      name: d.name.trim() || sp.name,
+      species: d.species,
+      roomId: roomForPlant(d.roomId),
+      location: d.location,
+      light: d.light,
+      size: d.size,
+      pot: d.pot,
+      photo: d.photo || null,
+      customWater: tmp.customWater,
+      paused: !!d.paused,
+    });
+    if (d.pot === 'reservoir' && d.fresh) { if (!P.inRampUp(p, today)) p.plantedOn = today; } else delete p.plantedOn;
+    if (!d.id) {
+      const interval = P.waterInterval(p, today, plantWeather());
+      p.lastWatered = d.last === 'today' ? today : d.last === 'some' ? today - Math.ceil(interval / 2) : null;
+      // Dünger: nicht gleich am ersten Tag – die halbe Zeit gilt als erledigt.
+      if (sp.feed) p.lastFed = today - Math.round(sp.feed / 2);
+      state.plants.push(p);
+    }
+    syncPlants();
+    plantDraft = null;
+    save();
+    closeModal();
+    if (!d.id && P.isOutdoor(p)) refreshWeather(true);
+    render();
+    const water = plantTasks(p).find((t) => t.plantCare === 'water');
+    toast(d.id ? `${p.name} gespeichert 🪴` : `${p.name} angelegt 🪴 · Gießen ${relDue(plantTaskDue(water))}`);
+  }
+
+  // ------------------------------------------------ Foto & Erkennung
+
+  async function loadImage(file) {
+    const url = URL.createObjectURL(file);
+    try {
+      const img = new Image();
+      img.src = url;
+      await img.decode();
+      return img;
+    } finally {
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+    }
+  }
+
+  /** Verkleinert ein Bild. `square`: mittig quadratisch zuschneiden (Vorschaubild). */
+  function scaleImage(img, max, square) {
+    const w = img.naturalWidth;
+    const h = img.naturalHeight;
+    const side = Math.min(w, h);
+    const sw = square ? side : w;
+    const sh = square ? side : h;
+    const scale = Math.min(1, max / Math.max(sw, sh));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(sw * scale);
+    canvas.height = Math.round(sh * scale);
+    canvas.getContext('2d').drawImage(img, square ? (w - side) / 2 : 0, square ? (h - side) / 2 : 0, sw, sh, 0, 0, canvas.width, canvas.height);
+    return canvas;
+  }
+
+  async function choosePlantPhoto(file) {
+    const d = plantDraft;
+    try {
+      const img = await loadImage(file);
+      // Kleines Vorschaubild bleibt auf dem Gerät, ein größeres Bild geht nur zur Erkennung.
+      d.photo = scaleImage(img, 200, true).toDataURL('image/jpeg', 0.72);
+      d.blob = await new Promise((res) => scaleImage(img, 1280, false).toBlob(res, 'image/jpeg', 0.85));
+    } catch (e) {
+      toast('Das Foto konnte nicht gelesen werden.');
+      return;
+    }
+    if (plantDraft !== d) return;
+    // Neue Pflanze ohne gewählte Art: gleich erkennen.
+    if (!d.speciesTouched && d.blob) identifyDraft();
+    else renderPlantDialog();
+  }
+
+  const IDENT_ERRORS = {
+    not_configured: 'Die Foto-Erkennung ist noch nicht eingerichtet. Wähle die Art bitte über die Suche.',
+    key_invalid: 'Die Foto-Erkennung ist gerade nicht verfügbar (Schlüssel ungültig).',
+    quota: 'Für heute sind alle Foto-Erkennungen aufgebraucht – morgen geht es wieder.',
+    bad_image: 'Das Foto ist zu groß oder kein Bild.',
+  };
+
+  async function identifyDraft() {
+    const d = plantDraft;
+    if (!d || !d.blob) return;
+    d.ident = { busy: true };
+    renderPlantDialog();
+    try {
+      const fd = new FormData();
+      fd.append('images', d.blob, 'pflanze.jpg');
+      fd.append('organs', 'auto');
+      const res = await fetch(Shared.PLANT_ID_API, { method: 'POST', body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(IDENT_ERRORS[data.error] || `Erkennung fehlgeschlagen (${res.status}).`);
+      const results = (data.results || []).map((r) => Object.assign({}, r, {
+        commonNames: r.commonNames || [],
+        match: P.matchSpecies(r.scientificName, r.genus, r.family),
+      }));
+      d.ident = { results };
+      // Sichere Treffer gleich übernehmen.
+      const top = results[0];
+      if (top && top.score >= 0.25 && !d.speciesTouched) {
+        pickSpecies(top.match ? top.match.key : 'other', top.commonNames[0] || top.scientificName);
+        d.speciesTouched = false; // weitere Fotos dürfen die Art noch ändern
+      }
+    } catch (e) {
+      d.ident = { error: /fetch|network|load failed/i.test(String(e && e.message)) ? 'Keine Verbindung – die Foto-Erkennung braucht Internet.' : e.message };
+    }
+    if (plantDraft === d) renderPlantDialog();
+  }
+
+  // ------------------------------------------------ Einstellungen & Wetter
+
+  function plantsCard() {
+    const ps = plantsSettings();
+    const w = plantWeather();
+    const results = ui.locResults || [];
+    return `<section class="card">
+        <h2>🪴 Pflanzen</h2>
+        <p class="muted small">Deine Pflanzen legst du im Tab „Pflanzen“ an. Gegossen wird nach Bedarf: Art, Topf, Licht,
+          Jahreszeit, Wetter und deine Rückmeldung bestimmen den Termin.</p>
+        <label class="switch-row"><span>Pflanzen im Putzplan mitzählen<br>
+          <span class="muted small">Zeitbudget, Putz-Timer und Punkte. Aus: eigener Block unter „Heute“.</span></span>
+          <input type="checkbox" class="switch" data-plants-inplan ${S.plantsInPlan(state.settings) ? 'checked' : ''}></label>
+        <p><strong>Ort für das Wetter</strong><br><span class="muted small">Für Pflanzen auf Balkon und im Garten: Nach Regen fällt
+          das Gießen aus, bei Hitze wird früher gegossen, bei Frost gibt es einen Hinweis. Wetterdaten von Open-Meteo.</span></p>
+        ${ps.location ? `<p class="small">📍 <strong>${esc(ps.location.name)}</strong>${ps.location.region ? ` <span class="muted">${esc(ps.location.region)}</span>` : ''}
+          ${w ? `<br>🌧️ ${String(w.rain24).replace('.', ',')} mm in 24 Std. · 🌡️ bis ${Math.round(w.tmax)} °C, nachts ${Math.round(w.tmin)} °C` : ''}
+          <button class="link" data-action="plant-loc-clear">Entfernen</button></p>` : ''}
+        <div class="inline-form">
+          <input class="input" type="search" data-plant-loc-q value="${esc(ui.locQuery || '')}" placeholder="Ort, z. B. München">
+          <button class="btn" data-action="plant-loc-search">Suchen</button>
+        </div>
+        ${ui.locError ? `<p class="small bad-text">${esc(ui.locError)}</p>` : ''}
+        ${results.length ? `<div class="menu loc-list">${results.map((r, i) => `<button data-action="plant-loc-pick" data-i="${i}">📍 ${esc(r.name)} <span class="muted small">${esc([r.admin1, r.country].filter(Boolean).join(', '))}</span></button>`).join('')}</div>` : ''}
+      </section>`;
+  }
+
+  async function searchPlantLocation() {
+    const q = (ui.locQuery || '').trim();
+    if (!q) return;
+    ui.locError = null;
+    try {
+      const res = await fetch(P.geocodeUrl(q));
+      const data = await res.json();
+      ui.locResults = data.results || [];
+      if (!ui.locResults.length) ui.locError = 'Kein Ort gefunden.';
+    } catch (e) {
+      ui.locResults = [];
+      ui.locError = 'Keine Verbindung – bitte später nochmal versuchen.';
+    }
+    render();
+  }
+
+  function pickPlantLocation(i) {
+    const r = (ui.locResults || [])[i];
+    if (!r) return;
+    plantsSettings().location = { name: r.name, region: [r.admin1, r.country].filter(Boolean).join(', '), lat: r.latitude, lon: r.longitude };
+    plantsSettings().weather = null;
+    ui.locResults = [];
+    ui.locQuery = '';
+    save();
+    render();
+    refreshWeather(true);
+    toast(`📍 ${r.name} gespeichert`);
+  }
+
+  /** Wetter holen – höchstens alle 3 Stunden und nur, wenn eine Pflanze draußen steht. */
+  async function refreshWeather(force) {
+    const ps = plantsSettings();
+    if (!ps.location || weatherBusy) return;
+    if (!force && !(state.plants || []).some(P.isOutdoor)) return;
+    if (!force && ps.weather && Date.now() - ps.weather.at < WEATHER_EVERY_MS) return;
+    weatherBusy = true;
+    try {
+      const res = await fetch(P.weatherUrl(ps.location.lat, ps.location.lon));
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const w = P.parseWeather(await res.json(), Date.now());
+      if (w) {
+        ps.weather = w;
+        syncPlants();
+        save();
+        if (!document.querySelector('#modal-root .modal')) render();
+      }
+    } catch (e) {
+      // Ohne Internet wird ohne Wetter weitergerechnet.
+    } finally {
+      weatherBusy = false;
+    }
   }
 
   // ---------------------------------------------------------------- Allergiker-Modus
@@ -1868,6 +2562,8 @@
    */
   function migrate() {
     if (!state.settings) state.settings = defaultState().settings;
+    if (!Array.isArray(state.plants)) state.plants = [];
+    syncPlants();
     if (!state.settings.autoFollowUps) {
       state.settings.autoFollowUps = true;
       state.tasks.slice().forEach((t) => autoFollowUp(t));
@@ -1907,7 +2603,7 @@
     }
     tabs.hidden = false;
     tabs.querySelectorAll('[data-tab]').forEach((b) => b.classList.toggle('active', b.dataset.tab === ui.tab));
-    const views = { today: viewToday, week: viewWeek, rooms: viewRooms, team: viewTeam, settings: viewSettings };
+    const views = { today: viewToday, week: viewWeek, plants: viewPlants, rooms: viewRooms, team: viewTeam, settings: viewSettings };
     if (state.session && ui.tab === 'today') views.today = viewSession;
     view.innerHTML = views[ui.tab]();
     ensureSessionTimer();
@@ -1981,6 +2677,11 @@
         break;
       }
       case 'robot-room': toggleRobotRoom(id); break;
+      case 'add-plant': editPlant(null); break;
+      case 'edit-plant': editPlant(id); break;
+      case 'plant-loc-search': searchPlantLocation(); break;
+      case 'plant-loc-pick': pickPlantLocation(+el.dataset.i); break;
+      case 'plant-loc-clear': plantsSettings().location = null; plantsSettings().weather = null; syncPlants(); save(); render(); break;
       case 'session-start': startSessionDialog(); break;
       case 'session-toggle': sessionToggle(id); break;
       case 'session-pause': togglePause(); break;
@@ -2029,6 +2730,7 @@
   document.addEventListener('input', (ev) => {
     const t = ev.target;
     if (t.dataset.memberName !== undefined) ui.onboardMembers[+t.dataset.memberName] = t.value;
+    if (t.dataset.plantLocQ !== undefined) ui.locQuery = t.value;
     if (t.dataset.onboardMinutes !== undefined) {
       ui.onboardMinutes = +t.value;
       document.getElementById('min-val').textContent = t.value;
@@ -2044,6 +2746,12 @@
     }
     if (t.dataset.robot) setRobot(t.dataset.robot, t.checked);
     if (t.dataset.allergyToggle !== undefined) setAllergy({ enabled: t.checked });
+    if (t.dataset.plantsInplan !== undefined) {
+      plantsSettings().inPlan = t.checked;
+      save();
+      render();
+      toast(t.checked ? 'Pflanzen zählen jetzt zum Putzplan 🪴' : 'Pflanzen stehen jetzt als eigener Block unter „Heute“');
+    }
     if (t.dataset.onboardRobot) {
       ui.onboardRobot = ui.onboardRobot || {};
       ui.onboardRobot[t.dataset.onboardRobot] = t.checked;
@@ -2068,6 +2776,7 @@
 
   document.addEventListener('keydown', (ev) => {
     if (ev.key === 'Escape') closeModal();
+    if (ev.key === 'Enter' && ev.target.dataset && ev.target.dataset.plantLocQ !== undefined) searchPlantLocation();
   });
 
   // Plan neu berechnen, wenn die App nach Mitternacht wieder geöffnet wird.
@@ -2076,8 +2785,10 @@
     if (document.hidden) return;
     if (S.today() !== lastRenderDay) {
       lastRenderDay = S.today();
+      syncPlants();
       render();
     }
+    refreshWeather(false);
     if (Native.isNative) {
       // Erinnerungen mit dem aktuellen Plan neu einplanen; Berechtigungen können sich geändert haben.
       Native.scheduleReminders(state, Shared, S);
@@ -2113,6 +2824,7 @@
       syncToServiceWorker();
     }
     render();
+    refreshWeather(false);
   }
 
   start().catch(showError);
