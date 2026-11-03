@@ -43,7 +43,10 @@ verteilt die Arbeit nach deinem Zeitbudget auf die Woche und sagt dir jeden Tag,
 - **Räume mit Sauberkeitsanzeige** – jeder Raum zeigt, wie sauber er gerade ist; jede Aufgabe hat einen „Schmutzbalken“.
 - **Vorlagen** für Küche, Bad, Wohnzimmer, Schlafzimmer, Kinderzimmer, Flur, Balkon … mit sinnvollen Intervallen.
 - **Eigene Aufgaben** mit beliebigem Intervall (täglich bis jährlich oder „alle X Tage“), Dauer, Zuständigkeit und Pause-Funktion.
-- **Mehrere Personen** – faire Verteilung, feste Zuständigkeiten, freie Tage pro Person, Rangliste mit Punkten und Serie 🔥.
+- **Mehrere Personen** – jede Person hat ihr eigenes Zeitbudget pro Wochentag, der Plan verteilt danach. Räume können
+  einer Person gehören (z. B. Kinderzimmer → Lena): Ihre Aufgaben gehen nur an sie und warten, wenn sie keine Zeit hat.
+  Feste Zuständigkeiten, freie Tage, Rangliste mit Punkten und Serie 🔥. Mit Konto zeigt „Heute“ deine Aufgaben
+  (umschaltbar auf „Alle“), der Putz-Timer nimmt deine Aufgaben, und jedes Handy erinnert nur an die eigenen.
 - **Tägliche Erinnerung** per Push-Benachrichtigung zur gewählten Uhrzeit – mit den Aufgaben des Tages,
   auch wenn die App geschlossen ist (Android, iPhone ab iOS 16.4 als installierte App, Desktop).
 - **Als App installierbar** (PWA) – Symbol auf dem Startbildschirm, Vollbild, funktioniert offline.

@@ -90,12 +90,54 @@ test('Aufgaben werden fair auf Mitglieder verteilt', () => {
   assert.deepStrictEqual(counts, { m1: 2, m2: 1 });
 });
 
-test('feste Zuständigkeit und freie Tage werden beachtet', () => {
+test('feste Zuständigkeit und freie Tage: die Aufgabe wartet auf ihre Person', () => {
   const tasks = [mkTask('a', 7, 10, MONDAY - 9, { assignee: 'm2' }), mkTask('b', 7, 10, MONDAY - 8)];
   const members = [{ id: 'm1', offDays: [] }, { id: 'm2', offDays: [0] }];
+  const plan = S.planDays(state(tasks, { members }), MONDAY, 2);
+  // Montag hat m2 frei: a wartet, b macht m1.
+  assert.deepStrictEqual(Object.fromEntries(plan[0].items.map((i) => [i.task.id, i.memberId])), { b: 'm1' });
+  assert.deepStrictEqual(Object.fromEntries(plan[1].items.map((i) => [i.task.id, i.memberId])), { a: 'm2' });
+});
+
+test('Zeitbudget pro Person: jede Person bekommt höchstens ihre Zeit', () => {
+  const tasks = ['a', 'b', 'c', 'd', 'e'].map((id, i) => mkTask(id, 7, 10, MONDAY - 9 - i));
+  const members = [
+    { id: 'm1', minutesPerWeekday: [10, 10, 10, 10, 10, 10, 10] },
+    { id: 'm2', minutesPerWeekday: [30, 30, 30, 30, 30, 30, 30] },
+  ];
   const [day] = S.planDays(state(tasks, { members }), MONDAY, 1);
-  const byTask = Object.fromEntries(day.items.map((i) => [i.task.id, i.memberId]));
-  assert.deepStrictEqual(byTask, { a: 'm2', b: 'm1' });
+  const mins = day.items.reduce((acc, i) => ((acc[i.memberId] = (acc[i.memberId] || 0) + 10), acc), {});
+  assert.deepStrictEqual(mins, { m1: 10, m2: 30 });
+  assert.strictEqual(day.budget, 40);
+  assert.deepStrictEqual(day.people.m1, { budget: 10, done: 0, planned: 10 });
+  // Was niemand mehr schafft, kommt morgen.
+  assert.strictEqual(day.items.length, 4);
+});
+
+test('Räume gehören Personen: Aufgaben gehen nur an sie und warten notfalls', () => {
+  const rooms = [{ id: 'kids', ownerId: 'lena' }, { id: 'r' }];
+  const tasks = [mkTask('spielzeug', 7, 10, MONDAY - 9, { roomId: 'kids' }), mkTask('bad', 7, 10, MONDAY - 8)];
+  const members = [
+    { id: 'david', minutesPerWeekday: [60, 60, 60, 60, 60, 60, 60] },
+    { id: 'lena', minutesPerWeekday: [0, 15, 15, 15, 15, 15, 15] },
+  ];
+  const plan = S.planDays(state(tasks, { members, rooms }), MONDAY, 2);
+  assert.deepStrictEqual(plan[0].items.map((i) => [i.task.id, i.memberId]), [['bad', 'david']]);
+  assert.deepStrictEqual(plan[1].items.map((i) => [i.task.id, i.memberId]), [['spielzeug', 'lena']]);
+  // Eine fest zuständige Person schlägt den Raum.
+  tasks[0].assignee = 'david';
+  assert.deepStrictEqual(S.planDays(state(tasks, { members, rooms }), MONDAY, 1)[0].items.find((i) => i.task.id === 'spielzeug').memberId, 'david');
+  assert.ok(S.canDo(tasks[1], 'lena', { members, rooms }));
+  tasks[0].assignee = null;
+  assert.ok(!S.canDo(tasks[0], 'david', { members, rooms }));
+});
+
+test('Heute schon Erledigtes zählt beim Budget der Person, die es gemacht hat', () => {
+  const tasks = [mkTask('a', 7, 20, MONDAY), mkTask('b', 7, 10, MONDAY - 8), mkTask('c', 7, 10, MONDAY - 9)];
+  const members = [{ id: 'm1', minutesPerWeekday: [20, 20, 20, 20, 20, 20, 20] }, { id: 'm2', minutesPerWeekday: [20, 20, 20, 20, 20, 20, 20] }];
+  const history = [{ id: 'h', taskId: 'a', day: MONDAY, memberId: 'm1', minutes: 20 }];
+  const [day] = S.planDays(state(tasks, { members, history }), MONDAY, 1, ['a']);
+  assert.deepStrictEqual(day.items.map((i) => i.memberId), ['m2', 'm2']);
 });
 
 test('roomCleanliness', () => {

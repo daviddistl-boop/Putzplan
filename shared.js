@@ -68,7 +68,12 @@
   function reminderMessages(state, S, count) {
     const day = S.today();
     const done = (state.history || []).filter((h) => h.day === day && !h.skipped).map((h) => h.taskId);
-    return S.planDays(state, day, count, done).map((p) => Object.assign({ day: p.day }, messageForDay(state, p, S)));
+    // Jedes Handy erinnert nur an die Aufgaben seiner Person (state.me), wenn es mehrere gibt.
+    const me = state.me && (state.members || []).length > 1 ? state.me : null;
+    return S.planDays(state, day, count, done).map((p) => {
+      const mine = me ? Object.assign({}, p, { items: p.items.filter((i) => !i.memberId || i.memberId === me) }) : p;
+      return Object.assign({ day: p.day }, messageForDay(state, mine, S));
+    });
   }
 
   /** Titel und Text der Erinnerung für den heutigen Tag. */

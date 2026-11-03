@@ -29,7 +29,7 @@
       shoppingLists: [],
       shoppingItems: [],
       history: [],
-      settings: { minutesPerWeekday: [20, 20, 20, 20, 20, 60, 0] },
+      settings: { minutesPerWeekday: [20, 20, 20, 20, 20, 60, 0], perPersonBudget: true },
     };
   }
 
@@ -65,6 +65,8 @@
 
   /** Nur auf dem Gerät speichern (ohne Abgleich anzustoßen). */
   function persist() {
+    // Für die Erinnerungen dieses Geräts: wer bin ich in diesem Haushalt? (wird nicht abgeglichen)
+    state.me = myMemberId() || null;
     try {
       localStorage.setItem(stateKey(activeId), JSON.stringify(state));
     } catch (e) {
@@ -349,13 +351,37 @@
   /** Restzeit des heutigen Budgets – Vorschlag für die Timer-Dauer. */
   function remainingBudgetToday() {
     const today = S.today();
-    const doneMin = state.history.filter((h) => h.day === today && !h.skipped).reduce((sum, h) => sum + h.minutes, 0);
-    return Math.max(0, S.budgetFor(state.settings, today) - doneMin);
+    const me = personalScope();
+    const doneMin = state.history.filter((h) => h.day === today && !h.skipped && (!me || h.memberId === me)).reduce((sum, h) => sum + h.minutes, 0);
+    let budget;
+    if (me) budget = S.memberBudget(member(me), state.settings, today);
+    else if (state.members.length) budget = state.members.reduce((sum, m) => sum + S.memberBudget(m, state.settings, today), 0);
+    else budget = S.budgetFor(state.settings, today);
+    return Math.max(0, budget - doneMin);
+  }
+
+  /** Wer bin ich – wenn das bekannt ist und es mehrere Personen gibt? Sonst null (dann gilt alles für alle). */
+  function personalScope() {
+    const me = myMemberId();
+    return me && state.members.length > 1 ? me : null;
+  }
+
+  /** „Heute“ zeigt nur meine Aufgaben (Standard) – oder alle. */
+  function scopeMine() {
+    const me = personalScope();
+    return me && (ui.todayScope || 'mine') === 'mine' ? me : null;
+  }
+
+  /** Meine Aufgaben aus dem Tagesplan (ohne bekannte Person: alle). */
+  function myPlanItems(plan) {
+    const me = personalScope();
+    return me ? plan.items.filter((i) => !i.memberId || i.memberId === me) : plan.items;
   }
 
   function startSessionDialog() {
     const today = S.today();
     const plan = S.planDays(state, today, 1, doneTodayIds())[0];
+    plan.items = myPlanItems(plan);
     const planMin = plan.items.reduce((sum, i) => sum + S.estimate(i.task), 0);
     const suggested = Math.max(5, Math.round((remainingBudgetToday() || planMin || 15) / 5) * 5);
     const options = [...new Set([10, 15, 20, 30, 45, 60, suggested])].sort((a, b) => a - b);
@@ -386,6 +412,8 @@
   function startSession(minutes) {
     const today = S.today();
     const plan = S.planDays(state, today, 1, doneTodayIds())[0];
+    // Der Timer nimmt meine Aufgaben – die anderen putzen mit ihrem eigenen Handy.
+    plan.items = myPlanItems(plan);
     state.session = {
       day: today,
       startedAt: Date.now(),
@@ -415,7 +443,7 @@
     const s = state.session;
     const remainingMin = sessionRemaining(s) / MIN;
     if (remainingMin < 2) return false;
-    const next = S.bonusCandidates(state, S.today(), s.taskIds.concat(doneTodayIds()), remainingMin + 1)[0];
+    const next = S.bonusCandidates(state, S.today(), s.taskIds.concat(doneTodayIds()), remainingMin + 1, personalScope())[0];
     if (!next) return false;
     s.taskIds.push(next.id);
     s.bonusIds.push(next.id);
@@ -863,15 +891,19 @@
   function viewToday() {
     const today = S.today();
     const plan = S.planDays(state, today, 1, doneTodayIds())[0];
-    const doneEntries = state.history.filter((h) => h.day === today && !h.skipped);
+    const mine = scopeMine();
+    const items = mine ? plan.items.filter((i) => !i.memberId || i.memberId === mine) : plan.items;
+    const allDone = state.history.filter((h) => h.day === today && !h.skipped);
+    const doneEntries = mine ? allDone.filter((h) => h.memberId === mine) : allDone;
     const plannedIds = new Set(plan.items.map((i) => i.task.id));
-    const doneIds = new Set(doneEntries.map((h) => h.taskId));
+    const doneIds = new Set(allDone.map((h) => h.taskId));
     const extra = state.tasks
-      .filter((t) => S.isPlannable(t, today, state.settings) && !plannedIds.has(t.id) && !doneIds.has(t.id) && S.urgency(t, today, undefined, state.settings) >= 1)
+      .filter((t) => S.isPlannable(t, today, state.settings) && !plannedIds.has(t.id) && !doneIds.has(t.id) && S.urgency(t, today, undefined, state.settings) >= 1
+        && (!mine || S.canDo(t, mine, state)))
       .sort((a, b) => S.urgency(b, today, undefined, state.settings) - S.urgency(a, today, undefined, state.settings));
 
     const doneMin = doneEntries.reduce((s, h) => s + h.minutes, 0);
-    const openMin = plan.items.reduce((s, i) => s + S.estimate(i.task), 0);
+    const openMin = items.reduce((s, i) => s + S.estimate(i.task), 0);
     const total = doneMin + openMin;
     const pct = total ? Math.round((doneMin / total) * 100) : 100;
     const d = new Date();
@@ -884,10 +916,13 @@
         <div>
           <p class="muted">${WEEKDAYS[S.weekday(today)]}, ${d.toLocaleDateString('de-DE', { day: 'numeric', month: 'long' })}</p>
           <h1>${greet}!</h1>
-          <p class="muted">${plan.items.length ? `${plan.items.length} Aufgabe${plan.items.length === 1 ? '' : 'n'} · ca. ${fmtMinutes(openMin)}` : 'Für heute ist alles erledigt.'}</p>
+          <p class="muted">${items.length ? `${items.length} Aufgabe${items.length === 1 ? '' : 'n'} · ca. ${fmtMinutes(openMin)}` : 'Für heute ist alles erledigt.'}</p>
         </div>
         <div class="ring" style="--p:${pct}"><span>${pct}%</span></div>
-      </header>`;
+      </header>
+      ${personalScope() ? `<div class="scope-toggle">
+        <button class="chip ${mine ? 'on' : ''}" data-action="today-scope" data-scope="mine">${avatar(member(personalScope()))} Meine</button>
+        <button class="chip ${mine ? '' : 'on'}" data-action="today-scope" data-scope="all">👥 Alle</button></div>` : ''}`;
 
     if (state.tasks.length) {
       html += `<button class="btn primary block timer-btn" data-action="session-start">⏱️ Putz-Timer starten</button>`;
@@ -909,8 +944,8 @@
       return html;
     }
 
-    if (plan.items.length) {
-      html += `<section><h2>Heute zu tun</h2><ul class="list">${plan.items.map((i) => taskRow(i.task, i.memberId, i.early ? 'Vorgezogen' : null)).join('')}</ul></section>`;
+    if (items.length) {
+      html += `<section><h2>${mine ? 'Für dich heute' : 'Heute zu tun'}</h2><ul class="list">${items.map((i) => taskRow(i.task, i.memberId, i.early ? 'Vorgezogen' : null)).join('')}</ul></section>`;
     } else {
       html += `<div class="empty big"><div class="emoji">🎉</div><p><strong>Alles sauber!</strong><br>Genieß deinen Tag.</p></div>`;
     }
@@ -986,6 +1021,7 @@
       const due = tasks.filter((t) => S.isPlannable(t, today, state.settings) && S.urgency(t, today, undefined, state.settings) >= 1).length;
       return `<button class="room-card" data-action="open-room" data-id="${r.id}">
         <span class="room-emoji">${r.icon}</span>
+        ${r.ownerId && member(r.ownerId) ? `<span class="room-owner">${avatar(member(r.ownerId))}</span>` : ''}
         <span class="room-name">${esc(r.name)}</span>
         <span class="muted small">${tasks.length} Aufgaben${due ? ` · <strong class="bad-text">${due} fällig</strong>` : ''}</span>
         <span class="bar"><span style="width:${pct}%;background:${cleanlinessColor(pct)}"></span></span>
@@ -1108,12 +1144,7 @@
       ${plantsCard()}
       ${robotCard()}
       ${allergyCard()}
-      <section class="card">
-        <h2>Zeitbudget pro Tag</h2>
-        <p class="muted small">Wie viele Minuten möchtest du an welchem Tag putzen? Der Plan verteilt die Aufgaben automatisch. 0 = freier Tag.</p>
-        <div class="budget-grid">${WEEKDAYS_SHORT.map((w, i) => `
-          <label><span>${w}</span><input type="number" min="0" max="600" step="5" value="${b[i]}" data-budget="${i}"></label>`).join('')}</div>
-      </section>
+      ${budgetCard(b)}
       <section class="card">
         <h2>Mitglieder</h2>
         <p class="muted small">Wer im Haushalt putzt – auch Personen ohne eigenes Handy, z. B. Kinder.${cloud.user ? ' 🔗 = mit Konto verknüpft.' : ''}</p>
@@ -1132,6 +1163,30 @@
         ${isCloudHousehold() ? '' : '<button class="btn danger block" data-action="reset">Alles zurücksetzen</button>'}
       </section>
       <p class="muted small center">Putzplan · funktioniert offline · als App installierbar</p>`;
+  }
+
+  /** Zeitbudget: ohne Mitglieder eines für alle, sonst pro Person (ich zuerst). */
+  function budgetCard(b) {
+    if (!state.members.length) {
+      return `<section class="card">
+        <h2>Zeitbudget pro Tag</h2>
+        <p class="muted small">Wie viele Minuten möchtest du an welchem Tag putzen? Der Plan verteilt die Aufgaben automatisch. 0 = freier Tag.</p>
+        <div class="budget-grid">${WEEKDAYS_SHORT.map((w, i) => `
+          <label><span>${w}</span><input type="number" min="0" max="600" step="5" value="${b[i]}" data-budget="${i}"></label>`).join('')}</div>
+      </section>`;
+    }
+    const me = myMemberId();
+    const people = state.members.slice().sort((x, y) => (y.id === me) - (x.id === me));
+    const today = S.today();
+    return `<section class="card">
+        <h2>Zeitbudget pro Person</h2>
+        <p class="muted small">Wie viele Minuten hat jede Person an welchem Tag? Der Plan verteilt die Aufgaben danach. 0 = freier Tag.</p>
+        ${people.map((m) => `<div class="budget-person">
+          <div class="budget-who">${avatar(m)} <strong>${esc(m.name)}</strong>${m.id === me ? ' <span class="badge">Du</span>' : ''}</div>
+          <div class="budget-grid">${WEEKDAYS_SHORT.map((w, i) => `
+            <label><span>${w}</span><input type="number" min="0" max="600" step="5" value="${S.memberBudget(Object.assign({}, m, { offDays: [] }), state.settings, today - S.weekday(today) + i)}"
+              data-budget="${i}" data-budget-member="${m.id}"></label>`).join('')}</div></div>`).join('')}
+      </section>`;
   }
 
   function viewOnboarding() {
@@ -1282,7 +1337,7 @@
         ${robotEnabled() ? `<label>Bodenreinigung<select class="input" name="floor">
           ${[['', 'Keine Bodenaufgabe'], ['vacuum', 'Staubsaugen (Saugroboter)'], ['mop', 'Boden wischen (Wischroboter)']]
             .map(([v, l]) => `<option value="${v}" ${S.floorType(t) === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>` : ''}
-        ${state.members.length ? `<label>Zuständig<select class="input" name="assignee">${memberOptions(t.assignee, 'Automatisch verteilen')}</select></label>` : ''}
+        ${state.members.length ? `<label>Zuständig<select class="input" name="assignee">${memberOptions(t.assignee, (room(t.roomId) && member(room(t.roomId).ownerId)) ? `Wem der Raum gehört (${esc(member(room(t.roomId).ownerId).name)})` : 'Automatisch verteilen')}</select></label>` : ''}
         ${t.trigger ? '' : followUpFields(t)}
         ${taskId ? `<label class="check-label"><input type="checkbox" name="paused" ${t.paused ? 'checked' : ''}> Pausieren (z. B. im Urlaub)</label>` : t.trigger ? '' : `
           <label>Zuletzt erledigt<select class="input" name="last">
@@ -1366,6 +1421,8 @@
       <h2>${roomId ? 'Raum bearbeiten' : 'Neuer Raum'}</h2>
       <form class="form">
         <label>Name<input class="input" name="name" required value="${esc(r.name)}"></label>
+        ${state.members.length > 1 ? `<label>Gehört<select class="input" name="ownerId">${memberOptions(r.ownerId, 'Allen (gemeinsam)')}</select></label>
+          <p class="small muted">Gehört der Raum einer Person, gehen seine Aufgaben nur an sie – hat sie keine Zeit, warten sie.</p>` : ''}
         <div class="icon-grid">${T.ROOM_ICONS.map((i) => `<button type="button" class="icon-pick ${i === r.icon ? 'on' : ''}" data-icon="${i}">${i}</button>`).join('')}</div>
         <div class="btn-row">
           ${roomId ? '<button type="button" class="btn danger" data-del>Löschen</button>' : ''}
@@ -1396,8 +1453,9 @@
         ev.preventDefault();
         const name = ev.target.name.value.trim();
         if (!name) return;
-        if (roomId) Object.assign(r, { name, icon });
-        else { const nr = { id: uid(), name, icon }; state.rooms.push(nr); ui.roomId = nr.id; }
+        const ownerId = ev.target.ownerId ? ev.target.ownerId.value || null : r.ownerId || null;
+        if (roomId) Object.assign(r, { name, icon, ownerId });
+        else { const nr = { id: uid(), name, icon, ownerId }; state.rooms.push(nr); ui.roomId = nr.id; }
         save(); closeModal(); render();
       };
     });
@@ -1431,6 +1489,7 @@
         if (!confirm(`${m.name} entfernen?`)) return;
         state.members = state.members.filter((x) => x.id !== memberId);
         state.tasks.forEach((t) => { if (t.assignee === memberId) t.assignee = null; });
+        state.rooms.forEach((r) => { if (r.ownerId === memberId) r.ownerId = null; });
         save(); closeModal(); render();
       };
       el.querySelector('form').onsubmit = (ev) => {
@@ -3607,6 +3666,16 @@
   function migrate() {
     if (!state.settings) state.settings = defaultState().settings;
     if (!Array.isArray(state.plants)) state.plants = [];
+    if (!state.settings.perPersonBudget) {
+      // Bisher gab es ein gemeinsames Budget für alle – jetzt hat jede Person ihr eigenes.
+      // Aufteilen, damit der Plan insgesamt gleich viel Zeit vorsieht wie vorher.
+      const n = state.members.length;
+      const base = state.settings.minutesPerWeekday || [20, 20, 20, 20, 20, 60, 0];
+      for (const m of state.members) {
+        if (!Array.isArray(m.minutesPerWeekday)) m.minutesPerWeekday = base.map((v) => (n > 1 ? Math.round(v / n / 5) * 5 : v));
+      }
+      state.settings.perPersonBudget = true;
+    }
     if (!Array.isArray(state.shoppingLists)) state.shoppingLists = [];
     if (!Array.isArray(state.shoppingItems)) state.shoppingItems = [];
     syncPlants();
@@ -3741,6 +3810,7 @@
       }
       case 'robot-room': toggleRobotRoom(id); break;
       case 'add-plant': editPlant(null); break;
+      case 'today-scope': ui.todayScope = el.dataset.scope; render(); break;
       case 'shop-done': shopDone(id); break;
       case 'shop-edit': ev.stopPropagation(); shopItemDialog(id); break;
       case 'shop-add-item': {
@@ -3861,7 +3931,16 @@
 
   document.addEventListener('change', (ev) => {
     const t = ev.target;
-    if (t.dataset.budget !== undefined) {
+    if (t.dataset.budget !== undefined && t.dataset.budgetMember) {
+      const m = member(t.dataset.budgetMember);
+      if (m) {
+        const today = S.today();
+        if (!Array.isArray(m.minutesPerWeekday)) m.minutesPerWeekday = WEEKDAYS_SHORT.map((_, i) => S.memberBudget(Object.assign({}, m, { offDays: [] }), state.settings, today - S.weekday(today) + i));
+        m.minutesPerWeekday[+t.dataset.budget] = Math.max(0, parseInt(t.value, 10) || 0);
+        save();
+        toast(`Zeit von ${m.name} gespeichert – der Plan wurde angepasst.`);
+      }
+    } else if (t.dataset.budget !== undefined) {
       state.settings.minutesPerWeekday[+t.dataset.budget] = Math.max(0, parseInt(t.value, 10) || 0);
       save();
       toast('Zeitbudget gespeichert – der Plan wurde angepasst.');

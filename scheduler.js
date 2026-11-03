@@ -192,10 +192,10 @@
    * Zusatzaufgaben, wenn man schneller fertig ist: die dringendsten aktiven
    * Aufgaben, die noch in die Restzeit passen und schon etwas schmutzig sind.
    */
-  function bonusCandidates(state, day, excludeIds, maxMinutes) {
+  function bonusCandidates(state, day, excludeIds, maxMinutes, memberId) {
     const exclude = new Set(excludeIds || []);
     return (state.tasks || [])
-      .filter((t) => isPlannable(t, day, state.settings) && !exclude.has(t.id) && estimate(t) <= maxMinutes)
+      .filter((t) => isPlannable(t, day, state.settings) && !exclude.has(t.id) && estimate(t) <= maxMinutes && canDo(t, memberId, state))
       .map((t) => ({ task: t, u: urgency(t, day, undefined, state.settings) }))
       .filter((e) => e.u >= 0.5)
       .sort((a, b) => b.u - a.u)
@@ -208,34 +208,51 @@
     return typeof b === 'number' ? b : 30;
   }
 
+  /** Zeit einer Person an diesem Tag in Minuten: eigenes Budget, sonst das des Haushalts. Freie Tage = 0. */
+  function memberBudget(member, settings, day) {
+    const wd = weekday(day);
+    if ((member.offDays || []).includes(wd)) return 0;
+    const own = member.minutesPerWeekday;
+    if (Array.isArray(own) && typeof own[wd] === 'number') return own[wd];
+    return budgetFor(settings || {}, day);
+  }
+
   /**
-   * Verteilt eine Aufgabe auf ein Haushaltsmitglied: feste Zuständigkeit hat
-   * Vorrang, sonst bekommt sie, wer an diesem Tag (und dann in der Woche)
-   * am wenigsten zu tun hat.
+   * Wer darf eine Aufgabe übernehmen? Eine fest zuständige Person hat Vorrang, dann wem der
+   * Raum gehört (z. B. Kinderzimmer → Lena), sonst alle.
    */
-  function pickMember(task, members, dayLoad, weekLoad, day) {
-    if (!members.length) return null;
-    if (task.assignee && members.some((m) => m.id === task.assignee)) return task.assignee;
-    const available = members.filter((m) => !(m.offDays || []).includes(weekday(day)));
-    const pool = available.length ? available : members;
-    let best = pool[0];
-    for (const m of pool) {
-      const a = (dayLoad[m.id] || 0) * 1000 + (weekLoad[m.id] || 0);
-      const b = (dayLoad[best.id] || 0) * 1000 + (weekLoad[best.id] || 0);
-      if (a < b) best = m;
-    }
-    return best.id;
+  function candidatesFor(task, members, rooms) {
+    if (task.assignee && members.some((m) => m.id === task.assignee)) return [task.assignee];
+    const room = (rooms || []).find((r) => r.id === task.roomId);
+    if (room && room.ownerId && members.some((m) => m.id === room.ownerId)) return [room.ownerId];
+    return members.map((m) => m.id);
+  }
+
+  /** Darf diese Person die Aufgabe machen? (Ohne Mitglieder: ja.) */
+  function canDo(task, memberId, state) {
+    const members = state.members || [];
+    if (!members.length || !memberId) return true;
+    return candidatesFor(task, members, state.rooms).includes(memberId);
   }
 
   /**
    * Erstellt den Plan für `days` Tage ab `startDay`.
-   * `doneToday` enthält die IDs der Aufgaben, die am Starttag schon erledigt
-   * wurden – deren Zeit wird vom Budget abgezogen.
+   *
+   * Jede Person hat ihr eigenes Zeitbudget pro Wochentag. Fällige Aufgaben bekommt, wer sie
+   * übernehmen darf und noch Zeit hat – bei mehreren die Person, die relativ am wenigsten
+   * zu tun hat. Passt eine Aufgabe zu niemandem mehr, wartet sie auf den nächsten Tag.
+   * Ohne Mitglieder gilt ein gemeinsames Budget.
+   *
+   * `doneToday` enthält die IDs der Aufgaben, die am Starttag schon erledigt wurden – deren
+   * Zeit wird vom Budget abgezogen (wer sie erledigt hat, steht im Verlauf).
    */
   function planDays(state, startDay, days, doneToday) {
     const tasks = state.tasks || [];
     const members = state.members || [];
+    const rooms = state.rooms || [];
     const settings = state.settings || {};
+    const solo = !members.length;
+    const SOLO = '';
     const done = new Set(doneToday || []);
     const sim = new Map(tasks.map((t) => [t.id, t.lastDone]));
     // Fälligkeit der Folgeaufgaben in der Simulation – und wer wen auslöst.
@@ -246,18 +263,30 @@
       if (!followUps.has(t.trigger.afterTaskId)) followUps.set(t.trigger.afterTaskId, []);
       followUps.get(t.trigger.afterTaskId).push(t);
     }
+    const memberIds = new Set(members.map((m) => m.id));
+    const keyOf = (memberId) => (solo ? SOLO : memberIds.has(memberId) ? memberId : members[0].id);
     const weekLoad = {};
     const plan = [];
 
     for (let i = 0; i < days; i++) {
       const day = startDay + i;
-      let budget = budgetFor(settings, day);
-      const dayLoad = {};
+      const budgets = {};
+      if (solo) budgets[SOLO] = budgetFor(settings, day);
+      else for (const m of members) budgets[m.id] = memberBudget(m, settings, day);
+      const spent = {}; // heute schon erledigt
+      const planned = {};
+      for (const k of Object.keys(budgets)) { spent[k] = 0; planned[k] = 0; }
       const items = [];
 
-      if (i === 0) {
-        for (const t of tasks) if (done.has(t.id)) budget -= estimate(t);
+      if (i === 0 && done.size) {
+        const todays = (state.history || []).filter((h) => h.day === startDay && !h.skipped && done.has(h.taskId));
+        if (todays.length) {
+          for (const h of todays) spent[keyOf(h.memberId)] += h.minutes || 0;
+        } else {
+          for (const t of tasks) if (done.has(t.id)) spent[keyOf(t.assignee)] += estimate(t);
+        }
       }
+      const load = (k) => (spent[k] + planned[k]) / Math.max(1, budgets[k]);
 
       const eligible = tasks.filter((t) => isPlannable(t, day, settings) && !(i === 0 && done.has(t.id)));
       const scored = eligible
@@ -265,15 +294,26 @@
         .filter((e) => !hasDueDate(e.task) || e.u > 0)
         .sort((a, b) => b.u - a.u || effectiveInterval(a.task, settings, day) - effectiveInterval(b.task, settings, day));
 
-      let used = 0;
-      const take = (entry) => {
-        const memberId = pickMember(entry.task, members, dayLoad, weekLoad, day);
-        if (memberId) {
-          dayLoad[memberId] = (dayLoad[memberId] || 0) + estimate(entry.task);
-          weekLoad[memberId] = (weekLoad[memberId] || 0) + estimate(entry.task);
-        }
-        items.push({ task: entry.task, urgency: entry.u, memberId, early: entry.u < 1 });
-        used += estimate(entry.task);
+      // Wer übernimmt? `strict`: nur wenn es ganz ins Budget passt.
+      const choose = (e, strict) => {
+        const cands = solo ? [SOLO] : candidatesFor(e.task, members, rooms);
+        const est = estimate(e.task);
+        const fits = cands.filter((k) => {
+          if (!(budgets[k] - spent[k] > 0)) return false;
+          if (spent[k] + planned[k] + est <= budgets[k]) return true;
+          // Tägliche Aufgaben passen immer rein – sie wären sonst sofort wieder fällig;
+          // und wer noch nichts eingeplant hat, bekommt eine Aufgabe auch, wenn sie etwas länger dauert.
+          return !strict && (effectiveInterval(e.task, settings, day) <= 1 || planned[k] === 0);
+        });
+        if (!fits.length) return undefined;
+        return fits.sort((a, b) => load(a) - load(b) || (weekLoad[a] || 0) - (weekLoad[b] || 0))[0];
+      };
+
+      const take = (entry, k) => {
+        const est = estimate(entry.task);
+        planned[k] += est;
+        weekLoad[k] = (weekLoad[k] || 0) + est;
+        items.push({ task: entry.task, urgency: entry.u, memberId: solo ? null : k, early: entry.u < 1 });
         sim.set(entry.task.id, day);
         if (entry.task.trigger) simDue.set(entry.task.id, null);
         else if (entry.task.plantId) simDue.set(entry.task.id, day + Math.max(1, entry.task.interval || 1));
@@ -282,23 +322,33 @@
 
       // 0. Fällige Folgeaufgaben und Pflanzenpflege kommen immer dran – auch an freien Tagen
       //    (die Wäsche muss ab, eine durstige Pflanze kann nicht warten).
-      for (const e of scored) if (hasDueDate(e.task)) take(e);
+      for (const e of scored) {
+        if (!hasDueDate(e.task)) continue;
+        const cands = solo ? [SOLO] : candidatesFor(e.task, members, rooms);
+        const withTime = cands.filter((k) => budgets[k] > 0);
+        const pool = withTime.length ? withTime : cands;
+        take(e, pool.slice().sort((a, b) => load(a) - load(b) || (weekLoad[a] || 0) - (weekLoad[b] || 0))[0]);
+      }
       // 1. Fällige Aufgaben nach Dringlichkeit.
       for (const e of scored) {
         if (hasDueDate(e.task)) continue;
         if (e.u < 1) break;
-        // Tägliche Aufgaben passen immer rein – sie wären sonst sofort wieder fällig.
-        if (budget <= 0) break;
-        if (used + estimate(e.task) <= budget || effectiveInterval(e.task, settings, day) <= 1 || used === 0) take(e);
+        const k = choose(e, false);
+        if (k !== undefined) take(e, k);
       }
       // 2. Freie Zeit mit bald fälligen Aufgaben füllen.
       for (const e of scored) {
         if (hasDueDate(e.task) || e.u >= 1 || e.u < PREFILL_THRESHOLD) continue;
         if (effectiveInterval(e.task, settings, day) < 3) continue; // Kurze Intervalle lohnen sich nicht vorzuziehen.
-        if (used + estimate(e.task) <= budget) take(e);
+        if (items.some((it) => it.task === e.task)) continue;
+        const k = choose(e, true);
+        if (k !== undefined) take(e, k);
       }
 
-      plan.push({ day, budget: Math.max(0, budget), minutes: used, items });
+      const total = Object.values(budgets).reduce((a, b) => a + b, 0);
+      const spentAll = Object.values(spent).reduce((a, b) => a + b, 0);
+      const people = solo ? {} : Object.fromEntries(members.map((m) => [m.id, { budget: budgets[m.id], done: spent[m.id], planned: planned[m.id] }]));
+      plan.push({ day, budget: Math.max(0, total - spentAll), minutes: Object.values(planned).reduce((a, b) => a + b, 0), items, people });
     }
     return plan;
   }
@@ -329,6 +379,9 @@
     robotHandles,
     isPlannable,
     budgetFor,
+    memberBudget,
+    candidatesFor,
+    canDo,
     estimate,
     recordDuration,
     bonusCandidates,
