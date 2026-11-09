@@ -35,6 +35,14 @@
         </provider>
     </application>
 
+    <!-- Seit Android 11 sieht die App andere Apps nur, wenn sie hier angemeldet sind. Ohne diesen
+         Eintrag findet „📷 Foto aufnehmen“ keine Kamera-App und öffnet stattdessen die Galerie. -->
+    <queries>
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
+    </queries>
+
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
