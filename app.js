@@ -2919,10 +2919,20 @@
     if (id.busy) return '<p class="small muted">🔍 Erkenne die Pflanze …</p>';
     if (id.error) return `<p class="small bad-text">${esc(id.error)}</p>`;
     if (!id.results.length) return '<p class="small muted">Keine Pflanze erkannt – versuch ein Foto, auf dem Blätter oder Blüten gut zu sehen sind.</p>';
+    const label = (r) => r.commonNames[0] || r.scientificName;
+    const picked = typeof id.picked === 'number' ? id.results[id.picked] : null;
+    // Nach der Auswahl: nur noch der übernommene Treffer – so sieht man, dass der Tipp gewirkt hat.
+    if (picked && !id.open) {
+      return `<div class="ident-picked"><span class="ident-check">✓</span>
+        <div class="grow"><strong>${esc(label(picked))}</strong> übernommen<br>
+          <span class="small muted">${picked.match ? `Steckbrief: ${esc(picked.match.name)}` : 'Standard-Profil – Intervall unten anpassbar'}</span></div>
+        <button type="button" class="btn small-btn" data-ident-more>Andere Treffer</button></div>`;
+    }
     return `<p class="small muted">Erkannt – tippe auf die richtige Art:</p>
       <div class="menu ident-list">${id.results.map((r, i) => `
-        <button type="button" data-ident="${i}" class="${r.match && r.match.key === d.species ? 'on' : ''}">
-          <strong>${esc(r.commonNames[0] || r.scientificName)}</strong> <span class="muted small">${Math.round(r.score * 100)} %</span><br>
+        <button type="button" data-ident="${i}" class="${i === id.picked ? 'on' : ''}">
+          <strong>${esc(label(r))}</strong> <span class="muted small">${Math.round(r.score * 100)} %</span>
+          ${i === id.picked ? '<span class="badge good">✓ gewählt</span>' : ''}<br>
           <span class="small muted"><em>${esc(r.scientificName)}</em> · ${r.match ? `Steckbrief: ${esc(r.match.name)}` : 'nicht in den Steckbriefen – Standard-Profil'}</span>
         </button>`).join('')}</div>`;
   }
@@ -2993,11 +3003,24 @@
       if (idBtn) idBtn.onclick = () => identifyDraft();
       el.querySelectorAll('[data-ident]').forEach((b) => {
         b.onclick = () => {
-          const r = d.ident.results[+b.dataset.ident];
-          pickSpecies(r.match ? r.match.key : 'other', r.commonNames[0] || r.scientificName);
-          rerender();
+          try {
+            const i = +b.dataset.ident;
+            const r = d.ident.results[i];
+            pickSpecies(r.match ? r.match.key : 'other', r.commonNames[0] || r.scientificName);
+            d.ident.picked = i;
+            d.ident.open = false;
+            rerender();
+            const box = document.querySelector('#modal-root .ident-picked');
+            if (box) box.scrollIntoView({ block: 'center' });
+            toast(`✓ ${r.commonNames[0] || r.scientificName} übernommen`);
+          } catch (e) {
+            console.error(e);
+            toast(`Das hat nicht geklappt: ${e && e.message ? e.message : e}`);
+          }
         };
       });
+      const more = el.querySelector('[data-ident-more]');
+      if (more) more.onclick = () => { d.ident.open = true; rerender(); };
       // Suche: nur die Trefferliste neu zeichnen, damit Fokus und Tastatur bleiben.
       const q = el.querySelector('[data-species-q]');
       const results = el.querySelector('[data-species-results]');
@@ -3180,6 +3203,8 @@
       if (top && top.score >= 0.25 && !d.speciesTouched) {
         pickSpecies(top.match ? top.match.key : 'other', top.commonNames[0] || top.scientificName);
         d.speciesTouched = false; // weitere Fotos dürfen die Art noch ändern
+        d.ident.picked = 0;
+        d.ident.open = true; // Liste offen lassen – man kann noch einen anderen Treffer wählen
       }
     } catch (e) {
       d.ident = { error: /fetch|network|load failed/i.test(String(e && e.message)) ? 'Keine Verbindung – die Foto-Erkennung braucht Internet.' : e.message };
