@@ -917,6 +917,7 @@
           <p class="muted">${WEEKDAYS[S.weekday(today)]}, ${d.toLocaleDateString('de-DE', { day: 'numeric', month: 'long' })}</p>
           <h1>${greet}!</h1>
           <p class="muted">${items.length ? `${items.length} Aufgabe${items.length === 1 ? '' : 'n'} · ca. ${fmtMinutes(openMin)}` : 'Für heute ist alles erledigt.'}</p>
+          ${streakLine(mine)}
         </div>
         <div class="ring" style="--p:${pct}"><span>${pct}%</span></div>
       </header>
@@ -1077,13 +1078,40 @@
       <button class="btn primary block" data-action="add-task" data-room="${r.id}">＋ Aufgabe hinzufügen</button>`;
   }
 
-  function streakDays() {
-    const days = new Set(state.history.filter((h) => !h.skipped).map((h) => h.day));
+  /**
+   * Serie: Tage am Stück, an denen etwas erledigt wurde (mit `memberId` nur von dieser Person).
+   * Freie Tage (kein Zeitbudget) unterbrechen die Serie nicht. Heute zählt erst, wenn etwas
+   * erledigt ist – bis dahin hält die Serie von gestern.
+   */
+  function streakDays(memberId) {
+    const days = new Set(state.history.filter((h) => !h.skipped && (!memberId || h.memberId === memberId)).map((h) => h.day));
+    const m = memberId && member(memberId);
+    const freeDay = (d) => {
+      if (m) return S.memberBudget(m, state.settings, d) === 0;
+      if (state.members.length) return state.members.every((x) => S.memberBudget(x, state.settings, d) === 0);
+      return S.budgetFor(state.settings, d) === 0;
+    };
     let d = S.today();
     if (!days.has(d)) d -= 1;
     let n = 0;
-    while (days.has(d)) { n++; d--; }
+    for (let guard = 0; guard < 3650; guard++) {
+      if (days.has(d)) n++;
+      else if (!freeDay(d)) break;
+      d--;
+    }
     return n;
+  }
+
+  /** Serie oben unter „Heute“. */
+  function streakLine(memberId) {
+    const n = streakDays(memberId);
+    if (!n) return '';
+    const today = S.today();
+    const doneToday = state.history.some((h) => h.day === today && !h.skipped && (!memberId || h.memberId === memberId));
+    const freeToday = memberId ? S.memberBudget(member(memberId), state.settings, today) === 0
+      : state.members.length ? state.members.every((x) => S.memberBudget(x, state.settings, today) === 0) : S.budgetFor(state.settings, today) === 0;
+    const hint = doneToday || freeToday ? '' : ' · heute dranbleiben!';
+    return `<p class="streak">🔥 <strong>${n} Tag${n === 1 ? '' : 'e'}</strong> Serie${hint}</p>`;
   }
 
   function viewTeam() {
@@ -2891,10 +2919,20 @@
     if (id.busy) return '<p class="small muted">🔍 Erkenne die Pflanze …</p>';
     if (id.error) return `<p class="small bad-text">${esc(id.error)}</p>`;
     if (!id.results.length) return '<p class="small muted">Keine Pflanze erkannt – versuch ein Foto, auf dem Blätter oder Blüten gut zu sehen sind.</p>';
+    const label = (r) => r.commonNames[0] || r.scientificName;
+    const picked = typeof id.picked === 'number' ? id.results[id.picked] : null;
+    // Nach der Auswahl: nur noch der übernommene Treffer – so sieht man, dass der Tipp gewirkt hat.
+    if (picked && !id.open) {
+      return `<div class="ident-picked"><span class="ident-check">✓</span>
+        <div class="grow"><strong>${esc(label(picked))}</strong> übernommen<br>
+          <span class="small muted">${picked.match ? `Steckbrief: ${esc(picked.match.name)}` : 'Standard-Profil – Intervall unten anpassbar'}</span></div>
+        <button type="button" class="btn small-btn" data-ident-more>Andere Treffer</button></div>`;
+    }
     return `<p class="small muted">Erkannt – tippe auf die richtige Art:</p>
       <div class="menu ident-list">${id.results.map((r, i) => `
-        <button type="button" data-ident="${i}" class="${r.match && r.match.key === d.species ? 'on' : ''}">
-          <strong>${esc(r.commonNames[0] || r.scientificName)}</strong> <span class="muted small">${Math.round(r.score * 100)} %</span><br>
+        <button type="button" data-ident="${i}" class="${i === id.picked ? 'on' : ''}">
+          <strong>${esc(label(r))}</strong> <span class="muted small">${Math.round(r.score * 100)} %</span>
+          ${i === id.picked ? '<span class="badge good">✓ gewählt</span>' : ''}<br>
           <span class="small muted"><em>${esc(r.scientificName)}</em> · ${r.match ? `Steckbrief: ${esc(r.match.name)}` : 'nicht in den Steckbriefen – Standard-Profil'}</span>
         </button>`).join('')}</div>`;
   }
@@ -2965,11 +3003,24 @@
       if (idBtn) idBtn.onclick = () => identifyDraft();
       el.querySelectorAll('[data-ident]').forEach((b) => {
         b.onclick = () => {
-          const r = d.ident.results[+b.dataset.ident];
-          pickSpecies(r.match ? r.match.key : 'other', r.commonNames[0] || r.scientificName);
-          rerender();
+          try {
+            const i = +b.dataset.ident;
+            const r = d.ident.results[i];
+            pickSpecies(r.match ? r.match.key : 'other', r.commonNames[0] || r.scientificName);
+            d.ident.picked = i;
+            d.ident.open = false;
+            rerender();
+            const box = document.querySelector('#modal-root .ident-picked');
+            if (box) box.scrollIntoView({ block: 'center' });
+            toast(`✓ ${r.commonNames[0] || r.scientificName} übernommen`);
+          } catch (e) {
+            console.error(e);
+            toast(`Das hat nicht geklappt: ${e && e.message ? e.message : e}`);
+          }
         };
       });
+      const more = el.querySelector('[data-ident-more]');
+      if (more) more.onclick = () => { d.ident.open = true; rerender(); };
       // Suche: nur die Trefferliste neu zeichnen, damit Fokus und Tastatur bleiben.
       const q = el.querySelector('[data-species-q]');
       const results = el.querySelector('[data-species-results]');
@@ -3152,6 +3203,8 @@
       if (top && top.score >= 0.25 && !d.speciesTouched) {
         pickSpecies(top.match ? top.match.key : 'other', top.commonNames[0] || top.scientificName);
         d.speciesTouched = false; // weitere Fotos dürfen die Art noch ändern
+        d.ident.picked = 0;
+        d.ident.open = true; // Liste offen lassen – man kann noch einen anderen Treffer wählen
       }
     } catch (e) {
       d.ident = { error: /fetch|network|load failed/i.test(String(e && e.message)) ? 'Keine Verbindung – die Foto-Erkennung braucht Internet.' : e.message };
