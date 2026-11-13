@@ -1167,6 +1167,10 @@
         <button class="row" data-action="go" data-tab="team"><span class="room-icon">🏆</span>
           <div class="row-main"><div class="row-title">Team & Statistik</div><div class="row-sub">Rangliste, Punkte, Serie und Verlauf</div></div><span class="muted">›</span></button>
       </section>
+      <section class="card team-card">
+        <button class="row" data-action="feedback"><span class="room-icon">💬</span>
+          <div class="row-main"><div class="row-title">Feedback & Fehler melden</div><div class="row-sub">Anregungen, Lob oder ein Fehler? Schreib uns!</div></div><span class="muted">›</span></button>
+      </section>
       ${installCard()}
       ${reminderCard()}
       ${plantsCard()}
@@ -3740,8 +3744,91 @@
   }
 
   // Sicherheitsnetz: Statt eines leeren Bildschirms eine Meldung mit Ausweg anzeigen.
+  // ---------------------------------------------------------------- Feedback
+
+  const FB = window.PutzplanFeedback;
+
+  function feedbackMeta() {
+    return {
+      appVersion: upd.version || (Native.isNative ? null : 'web'),
+      platform: Native.isNative ? 'android' : 'web',
+      page: ui.tab,
+      screen: `${window.innerWidth}x${window.innerHeight}`,
+      lang: navigator.language,
+      at: new Date().toISOString(),
+    };
+  }
+
+  async function sendFeedbackRow(row) {
+    if (!Cloud || !Cloud.available() || !navigator.onLine) throw new Error('offline');
+    await Cloud.sendFeedback(row);
+  }
+
+  /** Zwischengespeicherte Meldungen nachsenden (beim Start und wenn das Netz zurück ist). */
+  async function flushFeedback() {
+    if (!FB || !FB.readQueue(localStorage).length) return;
+    const n = await FB.flush(localStorage, sendFeedbackRow);
+    if (n) toast(n === 1 ? 'Deine gespeicherte Meldung ist jetzt angekommen. Danke! 💚' : `${n} gespeicherte Meldungen sind jetzt angekommen. Danke! 💚`);
+  }
+
+  /** Feedback-Dialog. `preset`: { kind, message } – z. B. vorausgefüllt mit einer Fehlermeldung. */
+  function openFeedback(preset) {
+    const p = preset || {};
+    let kind = p.kind || 'idea';
+    const kindInfo = (k) => FB.KINDS.find((x) => x.key === k);
+    openModal(`
+      <h2>💬 Feedback & Fehler melden</h2>
+      <p class="muted small">Hast du eine Idee, einen Fehler gefunden oder willst einfach etwas loswerden? Danke, dass du hilfst, Putzplan besser zu machen!</p>
+      <form class="form" novalidate>
+        <div class="chip-grid">${FB.KINDS.map((k) => `<button type="button" class="chip ${k.key === kind ? 'on' : ''}" data-kind="${k.key}">${k.label}</button>`).join('')}</div>
+        <label>Deine Nachricht
+          <textarea class="input" name="message" rows="5" maxlength="${FB.MAX_LENGTH}" placeholder="${esc(kindInfo(kind).placeholder)}">${esc(p.message || '')}</textarea></label>
+        <label>E-Mail für eine Antwort <span class="muted">(optional)</span>
+          <input class="input" name="contact" type="email" maxlength="200" autocomplete="email" placeholder="Nur wenn du eine Rückmeldung möchtest"></label>
+        <label class="check-label"><input type="checkbox" name="meta" checked> Technische Infos mitsenden (App-Version, Gerät, aktuelle Seite)</label>
+        <p class="small muted">Deine Putzpläne und Aufgaben werden nicht mitgeschickt.</p>
+        <p class="small bad-text" data-fb-error hidden></p>
+        <div class="btn-row">
+          <button type="button" class="btn" data-cancel>Abbrechen</button>
+          <button type="submit" class="btn primary">Senden</button>
+        </div>
+      </form>`, (el) => {
+      const form = el.querySelector('form');
+      const err = el.querySelector('[data-fb-error]');
+      el.querySelectorAll('[data-kind]').forEach((b) => {
+        b.onclick = () => {
+          kind = b.dataset.kind;
+          el.querySelectorAll('[data-kind]').forEach((x) => x.classList.toggle('on', x === b));
+          form.message.placeholder = kindInfo(kind).placeholder;
+        };
+      });
+      el.querySelector('[data-cancel]').onclick = closeModal;
+      form.message.oninput = () => { err.hidden = true; };
+      if (!p.message) setTimeout(() => form.message.focus(), 50);
+      form.onsubmit = async (ev) => {
+        ev.preventDefault();
+        const built = FB.build({ kind, message: form.message.value, contact: form.contact.value, includeMeta: form.meta.checked, meta: feedbackMeta() });
+        if (built.error) { err.textContent = built.error; err.hidden = false; return; }
+        const btn = form.querySelector('[type="submit"]');
+        btn.disabled = true;
+        btn.textContent = 'Wird gesendet …';
+        try {
+          await sendFeedbackRow(built.row);
+          closeModal();
+          toast('Danke! 💚 Deine Meldung ist angekommen.');
+          flushFeedback();
+        } catch (e) {
+          FB.enqueue(localStorage, built.row);
+          closeModal();
+          toast('Gespeichert – wird gesendet, sobald eine Verbindung besteht.');
+        }
+      };
+    });
+  }
+
   function showError(e) {
     console.error(e);
+    ui.lastError = e && e.message ? e.message : String(e);
     const view = document.getElementById('view');
     if (!view) return;
     view.innerHTML = `<div class="empty big"><div class="emoji">😵</div>
@@ -3750,7 +3837,8 @@
       <div class="btn-row">
         <button class="btn" data-action="export">⬇︎ Daten sichern</button>
         <button class="btn primary" data-action="reload">Neu laden</button>
-      </div></div>`;
+      </div>
+      <button class="link center-link" data-action="feedback-error">🐞 Diesen Fehler melden</button></div>`;
   }
 
   function render() {
@@ -3764,12 +3852,15 @@
   function renderView() {
     const view = document.getElementById('view');
     const tabs = document.getElementById('tabs');
+    const fab = document.getElementById('feedback-fab');
     if (!state.onboarded) {
       tabs.hidden = true;
+      if (fab) fab.hidden = true;
       view.innerHTML = viewOnboarding();
       return;
     }
     tabs.hidden = false;
+    if (fab) fab.hidden = false;
     const activeTab = ui.tab === 'team' ? 'settings' : ui.tab;
     tabs.querySelectorAll('[data-tab]').forEach((b) => b.classList.toggle('active', b.dataset.tab === activeTab));
     const views = { today: viewToday, week: viewWeek, plants: viewPlants, shop: viewShopping, rooms: viewRooms, team: viewTeam, settings: viewSettings };
@@ -3842,6 +3933,8 @@
       case 'add-member': editMember(null); break;
       case 'edit-member': editMember(id); break;
       case 'export': exportData(); break;
+      case 'feedback': openFeedback(); break;
+      case 'feedback-error': openFeedback({ kind: 'bug', message: `Fehlermeldung: ${ui.lastError || 'unbekannt'}\n\nWas ich gerade gemacht habe: ` }); break;
       case 'reload': location.reload(); break;
       case 'import': importData(); break;
       case 'install':
@@ -4066,7 +4159,7 @@
     scheduleSync(0);
   });
 
-  window.addEventListener('online', () => scheduleSync(0));
+  window.addEventListener('online', () => { scheduleSync(0); flushFeedback(); });
   // Wer in der Ansicht getippt hat, bekommt fremde Änderungen, sobald das Feld verlassen wird.
   document.addEventListener('focusout', () => { if (pendingRender) setTimeout(softRender, 50); });
 
@@ -4095,6 +4188,9 @@
   }
 
   async function start() {
+    const fab = document.getElementById('feedback-fab');
+    if (fab) fab.onclick = () => openFeedback();
+    setTimeout(() => flushFeedback().catch(() => {}), 3000);
     migrate();
     // Ein Timer von gestern ist abgelaufen – offene Aufgaben sind heute ohnehin wieder fällig.
     if (state.session && state.session.day !== S.today()) state.session = null;

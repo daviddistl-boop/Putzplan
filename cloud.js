@@ -179,9 +179,16 @@
     return () => { sb().removeChannel(channel); };
   }
 
+  // ------------------------------------------------------------ Feedback
+
+  /** Meldung in die Tabelle „feedback“ schreiben (darf jeder, auch ohne Konto; lesen kann sie niemand über die App). */
+  async function sendFeedback(row) {
+    check(await sb().from('feedback').insert(row));
+  }
+
   root.PutzplanCloud = {
     isNative, available, friendly, session, onAuth, sendCode, verifyCode, googleReady, googleSignIn, signOut, updateName,
     households, members, createHousehold, renameHousehold, invite, join, leave, removeMember, deleteHousehold, deleteAccount,
-    setMyMember, pull, push, subscribe,
+    setMyMember, pull, push, subscribe, sendFeedback,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);
