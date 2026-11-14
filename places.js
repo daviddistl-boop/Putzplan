@@ -12,10 +12,8 @@
   'use strict';
 
   const BASE = 'https://photon.komoot.io/api/';
-  // Overpass: Abfrage der OpenStreetMap-Datenbank im festen Umkreis – liefert wirklich alle
-  // Filialen in der Nähe (Photon gibt nur die „relevantesten“ zurück, nicht die nächsten).
-  const OVERPASS = 'https://overpass-api.de/api/interpreter';
-  const RADII_M = [2500, 7000, 20000]; // so lange vergrößern, bis genug Filialen gefunden sind
+  // Suchkasten um den Ort: so lange vergrößern, bis genug Filialen gefunden sind.
+  const RADII_M = [2500, 7000, 20000];
   const ENOUGH = 6;
   const TIMEOUT_MS = 8000;
   const MAX_STORE_KM = 20;
@@ -54,14 +52,30 @@
 
   function formatDistance(km) {
     if (!Number.isFinite(km)) return '';
-    return km < 1 ? `${Math.max(50, Math.round((km * 1000) / 50) * 50)} m` : `${km.toFixed(km < 10 ? 1 : 0).replace('.', ',')} km`;
+    return km < 1 ? `${Math.max(50, Math.round((km * 1000) / 50) * 50)}\u00a0m` : `${km.toFixed(km < 10 ? 1 : 0).replace('.', ',')}\u00a0km`;
+  }
+
+  // Wiener Bezirke: Postleitzahl 1XX0 → XX. Bezirk.
+  const VIENNA_DISTRICTS = ['Innere Stadt', 'Leopoldstadt', 'Landstraße', 'Wieden', 'Margareten', 'Mariahilf', 'Neubau',
+    'Josefstadt', 'Alsergrund', 'Favoriten', 'Simmering', 'Meidling', 'Hietzing', 'Penzing', 'Rudolfsheim-Fünfhaus',
+    'Ottakring', 'Hernals', 'Währing', 'Döbling', 'Brigittenau', 'Floridsdorf', 'Donaustadt', 'Liesing'];
+
+  const isPostcodePlace = (p) => p.type === 'postcode' || p.osm_value === 'postcode';
+  const postcodeOf = (p) => p.postcode || (isPostcodePlace(p) && p.name ? String(p.name) : '');
+
+  function districtOf(p, city) {
+    const pc = postcodeOf(p);
+    const m = /^1(\d\d)0$/.exec(pc);
+    if (city === 'Wien' && m && Number(m[1]) >= 1 && Number(m[1]) <= 23) return VIENNA_DISTRICTS[Number(m[1]) - 1];
+    // „Katastralgemeinde Margarethen“ → „Margarethen“
+    return String(p.district || p.locality || '').replace(/^Katastralgemeinde\s+/i, '');
   }
 
   /** „Wien, Margareten, 1050“ aus den Angaben eines Treffers. */
   function placeLabel(p) {
     const city = p.city || (['city', 'town', 'village'].includes(p.type || p.osm_value) ? p.name : null) || p.county || p.state;
-    const part = p.district || p.locality || (p.name && p.name !== city && !/^\d+$/.test(p.name) ? p.name : null);
-    const parts = [city, part, p.postcode].filter(Boolean);
+    const part = districtOf(p, city) || (p.name && p.name !== city && !/^\d+$/.test(p.name) ? p.name : null);
+    const parts = [city, part, postcodeOf(p)].filter(Boolean);
     return [...new Set(parts)].join(', ');
   }
 
@@ -77,8 +91,8 @@
     return {
       label,
       city: p.city || (['city', 'town', 'village'].includes(type) ? p.name : '') || '',
-      district: p.district || p.locality || '',
-      postcode: p.postcode || (type === 'postcode' ? p.name : '') || '',
+      district: districtOf(p, p.city || ''),
+      postcode: postcodeOf(p),
       country: String(p.countrycode || '').toUpperCase(),
       lat,
       lon,
@@ -99,6 +113,20 @@
       seen.add(p.label);
       return true;
     }).slice(0, 6);
+  }
+
+  /**
+   * Postleitzahl und Bezirk zu Koordinaten (Rückwärtssuche) → { label, city, district, postcode, country }
+   * oder null. Repariert früher gespeicherte Orte ohne Postleitzahl.
+   */
+  async function reversePlace(lat, lon, fetchFn) {
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    const f = fetchFn || root.fetch.bind(root);
+    const json = await getJson(f, `${BASE.replace(/api\/$/, 'reverse')}?${qs({ lat, lon, lang: 'de', limit: 1 })}`);
+    const p = (features(json)[0] || {}).properties;
+    if (!p || !postcodeOf(p)) return null;
+    const city = p.city || p.county || p.state || '';
+    return { label: placeLabel(Object.assign({}, p, { name: isPostcodePlace(p) ? p.name : '' })), city, district: districtOf(p, city), postcode: postcodeOf(p), country: String(p.countrycode || '').toUpperCase() };
   }
 
   /** Adresse einer Filiale: „Reinprechtsdorfer Straße 32, 1050 Wien“. */
@@ -131,40 +159,6 @@
     return s;
   }
 
-  /** Ein OpenStreetMap-Element aus Overpass → Markt wie bei normalizeStore, oder null. */
-  function normalizeOsmElement(el, near) {
-    const t = (el && el.tags) || {};
-    if (!t.shop || !(t.name || t.brand)) return null;
-    const lat = Number(el.lat != null ? el.lat : el.center && el.center.lat);
-    const lon = Number(el.lon != null ? el.lon : el.center && el.center.lon);
-    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-    const s = {
-      name: String(t.name || t.brand).trim(),
-      kind: t.shop,
-      street: t['addr:street'] || t['addr:place'] || '',
-      housenumber: t['addr:housenumber'] || '',
-      postcode: t['addr:postcode'] || '',
-      city: t['addr:city'] || '',
-      lat,
-      lon,
-      osmId: el.id != null ? String(el.id) : null,
-      osmType: el.type ? String(el.type).charAt(0).toUpperCase() : null, // N/W/R wie bei Photon
-    };
-    s.address = formatAddress(s);
-    s.km = near && Number.isFinite(near.lat) ? distanceKm(near, s) : NaN;
-    return s;
-  }
-
-  // Eingabe als Teil eines regulären Ausdrucks in Overpass: Buchstaben, Ziffern, Leerzeichen,
-  // Bindestrich, Apostroph und & bleiben, alles andere wird zu „beliebiges Zeichen“.
-  const regexSafe = (text) => text.replace(/[^\p{L}\p{N} '&-]/gu, '.');
-
-  function overpassQuery(q, near, radius) {
-    const re = regexSafe(q);
-    const around = `around:${radius},${near.lat},${near.lon}`;
-    return `[out:json][timeout:20];(nwr["shop"]["name"~"${re}",i](${around});nwr["shop"]["brand"~"${re}",i](${around}););out center tags 200;`;
-  }
-
   /**
    * Reihenfolge: zuerst Filialen mit der Postleitzahl des eigenen Ortes, dann nach Entfernung.
    * Doppelte (gleiche OSM-Kennung oder gleicher Name an gleicher Adresse) fliegen raus.
@@ -185,51 +179,37 @@
       .slice(0, limit || 25);
   }
 
-  async function searchStoresOverpass(q, near, f) {
-    let found = [];
-    for (const radius of RADII_M) {
-      const body = `data=${encodeURIComponent(overpassQuery(q, near, radius))}`;
-      const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-      const timer = ctrl ? setTimeout(() => ctrl.abort(), 20000) : null;
-      let json;
-      try {
-        const res = await f(OVERPASS, { method: 'POST', body, headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, signal: ctrl ? ctrl.signal : undefined });
-        if (!res.ok) throw new Error(`Overpass antwortet mit ${res.status}`);
-        json = await res.json();
-      } finally {
-        if (timer) clearTimeout(timer);
-      }
-      found = ((json && json.elements) || []).map((el) => normalizeOsmElement(el, near)).filter(Boolean);
-      if (found.length >= ENOUGH) break;
-    }
-    return found;
+  // Photon nur innerhalb eines Kastens um den Ort (bbox) und nur Geschäfte – so kommen die
+  // Filialen in der Nähe, nicht die „bekanntesten“ irgendwo.
+  function bboxAround(near, radius) {
+    const dLat = radius / 111320;
+    const dLon = dLat / Math.max(0.2, Math.cos((near.lat * Math.PI) / 180));
+    return [near.lon - dLon, near.lat - dLat, near.lon + dLon, near.lat + dLat].map((x) => x.toFixed(5)).join(',');
   }
 
-  async function searchStoresPhoton(q, near, f) {
-    const json = await getJson(f, `${BASE}?${qs({ q, lat: near.lat, lon: near.lon, lang: 'de', limit: 50 })}`);
-    return features(json).map((x) => normalizeStore(x, near));
+  async function photonAround(q, near, radius, f) {
+    const url = `${BASE}?${qs({ q, lat: near.lat, lon: near.lon, bbox: bboxAround(near, radius), osm_tag: 'shop', lang: 'de', limit: 50 })}`;
+    return features(await getJson(f, url)).map((x) => normalizeStore(x, near)).filter(Boolean);
   }
 
   /**
    * Märkte in der Nähe eines Ortes suchen, z. B. „Billa“: nur Geschäfte, höchstens
    * MAX_STORE_KM entfernt, Filialen im eigenen Postleitzahl-Gebiet zuerst, dann die nächsten.
-   * Über Overpass (vollständig im Umkreis); antwortet das nicht, über Photon.
+   * Gesucht wird im Kasten von ±2,5 km, dann ±7 km, dann ±20 km um den Ort.
    */
   async function searchStores(query, near, fetchFn) {
     const q = String(query || '').trim();
-    if (q.length < 2 || !near) return [];
+    if (q.length < 2 || !near || !Number.isFinite(near.lat) || !Number.isFinite(near.lon)) return [];
     const f = fetchFn || root.fetch.bind(root);
-    let list;
-    try {
-      list = await searchStoresOverpass(q, near, f);
-    } catch (e) {
-      list = null;
+    let list = [];
+    for (const radius of RADII_M) {
+      list = sortStores(list.concat(await photonAround(q, near, radius, f)), near, 100);
+      if (list.length >= ENOUGH) break;
     }
-    if (!list || !list.length) list = await searchStoresPhoton(q, near, f);
     return sortStores(list, near);
   }
 
-  const api = { BASE, OVERPASS, MAX_STORE_KM, normalizeOsmElement, overpassQuery, sortStores, distanceKm, formatDistance, placeLabel, normalizePlace, searchPlaces, formatAddress, normalizeStore, searchStores };
+  const api = { BASE, MAX_STORE_KM, bboxAround, sortStores, distanceKm, formatDistance, placeLabel, normalizePlace, searchPlaces, reversePlace, formatAddress, normalizeStore, searchStores };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Places = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

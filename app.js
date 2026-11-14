@@ -2964,6 +2964,18 @@
       drawPlace();
       drawList();
       drawPresets();
+      // Früher gespeicherter Ort ohne Postleitzahl (z. B. „Wien, Katastralgemeinde Margarethen“):
+      // einmal nachschlagen, damit Filialen der eigenen PLZ oben stehen.
+      if (hasPlace() && !place().postcode) {
+        const before = place();
+        PL.reversePlace(before.lat, before.lon).then((r) => {
+          if (!r || place() !== before) return;
+          state.settings.prices = Object.assign({}, before, { label: r.label, city: r.city || before.city, district: r.district, postcode: r.postcode });
+          save();
+          if (!editPlace) drawPlace();
+          if (storeQuery) searchStores();
+        }).catch(() => {});
+      }
       el.querySelector('[data-done]').onclick = () => {
         save();
         closeModal();
