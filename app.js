@@ -2810,7 +2810,7 @@
       const drawPlace = () => {
         const p = place();
         if (!editPlace && hasPlace()) {
-          placeBox.innerHTML = `<div class="place-chosen"><span>✓ <strong>${esc(p.label || p.city)}</strong></span>
+          placeBox.innerHTML = `<div class="place-chosen"><span>${p.gps ? '📍' : '✓'} <strong>${esc(p.label || p.city)}</strong>${p.gps ? ' <span class="tiny muted">(Standort)</span>' : ''}</span>
             <button class="link" data-place-edit>ändern</button></div>`;
           placeBox.querySelector('[data-place-edit]').onclick = () => { editPlace = true; drawPlace(); placeBox.querySelector('[data-place-q]').focus(); };
           return;
@@ -2821,7 +2821,41 @@
             <select class="input" data-country>${[['AT', '🇦🇹'], ['DE', '🇩🇪']].map(([c, f]) => `<option value="${c}" ${(p.country || 'AT') === c ? 'selected' : ''}>${f} ${c}</option>`).join('')}</select>
           </div>
           <div data-place-results></div>
-          <p class="tiny muted">Tipp: Mit deiner Adresse (z. B. „Pilgramgasse 10“) siehst du genau, welcher Markt am nächsten ist.</p>`;
+          <button class="btn block" type="button" data-place-gps>📍 Aktuellen Standort verwenden</button>
+          <p class="small bad-text" data-gps-msg hidden></p>
+          <p class="tiny muted">Tipp: Mit deiner Adresse (z. B. „Pilgramgasse 10“) oder dem Standort siehst du genau, welcher Markt am nächsten ist.</p>`;
+        const gpsBtn = placeBox.querySelector('[data-place-gps]');
+        const gpsMsg = placeBox.querySelector('[data-gps-msg]');
+        gpsBtn.onclick = async () => {
+          gpsBtn.disabled = true;
+          gpsBtn.textContent = '📍 Standort wird ermittelt …';
+          gpsMsg.hidden = true;
+          let pos;
+          try {
+            pos = await window.PutzplanNative.currentPosition();
+          } catch (e) {
+            gpsBtn.disabled = false;
+            gpsBtn.textContent = '📍 Aktuellen Standort verwenden';
+            gpsMsg.textContent = {
+              denied: 'Kein Zugriff auf den Standort. Erlaube ihn in den Android-Einstellungen der App – oder gib deine Adresse ein.',
+              off: 'Der Standort ist am Handy ausgeschaltet. Schalte ihn ein – oder gib deine Adresse ein.',
+            }[e && e.code] || 'Der Standort konnte gerade nicht ermittelt werden – gib stattdessen deine Adresse ein.';
+            gpsMsg.hidden = false;
+            return;
+          }
+          let r = null;
+          try { r = await PL.reversePlace(pos.lat, pos.lon); } catch (e) { /* ohne Adresse weiter */ }
+          state.settings.prices = {
+            label: r ? r.label : 'Aktueller Standort', city: (r && r.city) || '', district: (r && r.district) || '', postcode: (r && r.postcode) || '',
+            country: (r && r.country) || country.value, lat: pos.lat, lon: pos.lon, exact: true, gps: true,
+          };
+          save();
+          editPlace = false;
+          drawPlace();
+          drawList();
+          drawPresets();
+          if (storeQuery) searchStores();
+        };
         const input = placeBox.querySelector('[data-place-q]');
         const out = placeBox.querySelector('[data-place-results]');
         const country = placeBox.querySelector('[data-country]');

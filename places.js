@@ -150,8 +150,12 @@
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
     const f = fetchFn || root.fetch.bind(root);
     const json = await getJson(f, `${BASE.replace(/api\/$/, 'reverse')}?${qs({ lat, lon, lang: 'de', limit: 1 })}`);
-    const p = (features(json)[0] || {}).properties;
-    if (!p || !postcodeOf(p)) return null;
+    const first = features(json)[0];
+    const p = (first || {}).properties;
+    if (!p) return null;
+    const address = addressPlace(first, p, p.type || p.osm_value);
+    if (address) return { label: address.label, city: address.city, district: address.district, postcode: address.postcode, country: address.country };
+    if (!postcodeOf(p)) return null;
     const city = p.city || p.county || p.state || '';
     return { label: placeLabel(Object.assign({}, p, { name: isPostcodePlace(p) ? p.name : '' })), city, district: districtOf(p, city), postcode: postcodeOf(p), country: String(p.countrycode || '').toUpperCase() };
   }

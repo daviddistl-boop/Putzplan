@@ -198,7 +198,46 @@
     }
   }
 
+  // ------------------------------------------------------------ Standort
+
+  /**
+   * Aktueller Standort → { lat, lon, accuracy } (Meter). Fragt nur hier nach der Erlaubnis.
+   * Fehler haben `code`: 'denied' (keine Erlaubnis), 'off' (Standort am Handy aus), 'failed'.
+   */
+  function locationError(code, message) {
+    const e = new Error(message || code);
+    e.code = code;
+    return e;
+  }
+
+  async function currentPosition() {
+    if (isNative && P.Geolocation) {
+      let perm = await P.Geolocation.checkPermissions().catch(() => ({}));
+      const ok = (x) => x && (x.location === 'granted' || x.coarseLocation === 'granted');
+      if (!ok(perm)) perm = await P.Geolocation.requestPermissions({ permissions: ['location', 'coarseLocation'] }).catch(() => perm);
+      if (!ok(perm)) throw locationError('denied');
+      try {
+        const pos = await P.Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
+        return { lat: pos.coords.latitude, lon: pos.coords.longitude, accuracy: pos.coords.accuracy };
+      } catch (e) {
+        // Fehlercodes des Plugins: 0003 Erlaubnis verweigert, 0007/0009/0017 Standort am Handy aus.
+        const msg = `${(e && e.code) || ''} ${(e && e.message) || ''}`;
+        throw locationError(/GLOC-00(07|09|17)|not enabled/i.test(msg) ? 'off' : /GLOC-0003|denied/i.test(msg) ? 'denied' : 'failed', msg);
+      }
+    }
+    const geo = root.navigator && root.navigator.geolocation;
+    if (!geo) throw locationError('failed', 'kein Standort verfügbar');
+    return new Promise((resolve, reject) => {
+      geo.getCurrentPosition(
+        (pos) => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude, accuracy: pos.coords.accuracy }),
+        (err) => reject(locationError(err && err.code === 1 ? 'denied' : 'failed', err && err.message)),
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
+      );
+    });
+  }
+
   root.PutzplanNative = {
+    currentPosition,
     isNative,
     saveBackup,
     loadBackup,

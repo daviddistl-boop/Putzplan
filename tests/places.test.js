@@ -117,7 +117,7 @@ test('Rückwärtssuche: Koordinaten → Postleitzahl und Bezirk (echte Photon-An
   assert.ok(urls[0].startsWith('https://photon.komoot.io/reverse?lat=48.1868'));
   assert.deepStrictEqual(r, { label: 'Wien, Margareten, 1050', city: 'Wien', district: 'Margareten', postcode: '1050', country: 'AT' });
   const street = await PL.reversePlace(48.1, 16.3, async () => ({ ok: true, json: async () => ({ features: [feature({ osm_key: 'highway', type: 'street', name: 'Pilgramgasse', postcode: '1050', city: 'Wien', countrycode: 'AT' }, 16.3, 48.1)] }) }));
-  assert.strictEqual(street.label, 'Wien, Margareten, 1050');
+  assert.strictEqual(street.label, 'Pilgramgasse, 1050 Wien');
   assert.strictEqual(await PL.reversePlace(48.1, 16.3, async () => ({ ok: true, json: async () => ({ features: [] }) })), null);
 });
 
@@ -143,4 +143,9 @@ test('Filialsuche mit Adresse: nur nach Entfernung, keine PLZ-Gruppe', async () 
   const r = await PL.searchStores('billa', Object.assign({}, NEAR, { lat: 48.1860, lon: 16.3550, exact: true }), fake);
   assert.deepStrictEqual(r.map((s) => s.osmId), ['3', '2', '1']);
   assert.ok(r.every((s) => !s.samePostcode));
+});
+
+test('Rückwärtssuche am Standort: Hausadresse wird zur Adresse', async () => {
+  const fake = async () => ({ ok: true, json: async () => ({ features: [feature({ osm_key: 'amenity', osm_value: 'restaurant', type: 'house', name: 'China Restaurant Duft', housenumber: '32', street: 'Reinprechtsdorfer Straße', district: 'Katastralgemeinde Margarethen', city: 'Wien', postcode: '1050', countrycode: 'AT' }, 16.35487, 48.18507)] }) });
+  assert.deepStrictEqual(await PL.reversePlace(48.18507, 16.35487, fake), { label: 'Reinprechtsdorfer Straße 32, 1050 Wien', city: 'Wien', district: 'Margareten', postcode: '1050', country: 'AT' });
 });
