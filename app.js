@@ -2884,7 +2884,15 @@
       const drawResults = () => {
         if (!storeQuery) { results.innerHTML = ''; return; }
         const have = new Set(stores().map((s) => s.osmId).filter(Boolean));
-        const rows = storeResults.map((r, i) => `<li class="row">
+        const pc = place().postcode;
+        const anyLocal = storeResults.some((r) => r.samePostcode);
+        const header = (r, i) => {
+          if (!anyLocal) return '';
+          if (i === 0 && r.samePostcode) return `<li class="found-head">📍 In ${esc(pc)}</li>`;
+          if (!r.samePostcode && (i === 0 || storeResults[i - 1].samePostcode)) return '<li class="found-head">Weiter weg</li>';
+          return '';
+        };
+        const rows = storeResults.map((r, i) => `${header(r, i)}<li class="row">
             <div class="row-main"><div class="row-title">${esc(prettyStoreName(r.name))}</div>
               <div class="row-sub">${esc(r.address || 'Adresse unbekannt')}${Number.isFinite(r.km) ? ` · ${PL.formatDistance(r.km)}` : ''}</div></div>
             ${r.osmId && have.has(r.osmId) ? '<span class="good-text">✓</span>' : `<button class="btn" data-add-found="${i}">＋</button>`}</li>`).join('');

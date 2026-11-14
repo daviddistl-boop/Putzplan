@@ -12,6 +12,11 @@
   'use strict';
 
   const BASE = 'https://photon.komoot.io/api/';
+  // Overpass: Abfrage der OpenStreetMap-Datenbank im festen Umkreis – liefert wirklich alle
+  // Filialen in der Nähe (Photon gibt nur die „relevantesten“ zurück, nicht die nächsten).
+  const OVERPASS = 'https://overpass-api.de/api/interpreter';
+  const RADII_M = [2500, 7000, 20000]; // so lange vergrößern, bis genug Filialen gefunden sind
+  const ENOUGH = 6;
   const TIMEOUT_MS = 8000;
   const MAX_STORE_KM = 20;
   // Orts-Arten, die als „Dein Ort“ taugen (Bezirk, Stadt, Postleitzahl …).
@@ -126,17 +131,48 @@
     return s;
   }
 
+  /** Ein OpenStreetMap-Element aus Overpass → Markt wie bei normalizeStore, oder null. */
+  function normalizeOsmElement(el, near) {
+    const t = (el && el.tags) || {};
+    if (!t.shop || !(t.name || t.brand)) return null;
+    const lat = Number(el.lat != null ? el.lat : el.center && el.center.lat);
+    const lon = Number(el.lon != null ? el.lon : el.center && el.center.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    const s = {
+      name: String(t.name || t.brand).trim(),
+      kind: t.shop,
+      street: t['addr:street'] || t['addr:place'] || '',
+      housenumber: t['addr:housenumber'] || '',
+      postcode: t['addr:postcode'] || '',
+      city: t['addr:city'] || '',
+      lat,
+      lon,
+      osmId: el.id != null ? String(el.id) : null,
+      osmType: el.type ? String(el.type).charAt(0).toUpperCase() : null, // N/W/R wie bei Photon
+    };
+    s.address = formatAddress(s);
+    s.km = near && Number.isFinite(near.lat) ? distanceKm(near, s) : NaN;
+    return s;
+  }
+
+  // Eingabe als Teil eines regulären Ausdrucks in Overpass: Buchstaben, Ziffern, Leerzeichen,
+  // Bindestrich, Apostroph und & bleiben, alles andere wird zu „beliebiges Zeichen“.
+  const regexSafe = (text) => text.replace(/[^\p{L}\p{N} '&-]/gu, '.');
+
+  function overpassQuery(q, near, radius) {
+    const re = regexSafe(q);
+    const around = `around:${radius},${near.lat},${near.lon}`;
+    return `[out:json][timeout:20];(nwr["shop"]["name"~"${re}",i](${around});nwr["shop"]["brand"~"${re}",i](${around}););out center tags 200;`;
+  }
+
   /**
-   * Märkte in der Nähe eines Ortes suchen, z. B. „Billa“: nur Geschäfte, höchstens
-   * MAX_STORE_KM entfernt, die nächsten zuerst.
+   * Reihenfolge: zuerst Filialen mit der Postleitzahl des eigenen Ortes, dann nach Entfernung.
+   * Doppelte (gleiche OSM-Kennung oder gleicher Name an gleicher Adresse) fliegen raus.
    */
-  async function searchStores(query, near, fetchFn) {
-    const q = String(query || '').trim();
-    if (q.length < 2 || !near) return [];
-    const f = fetchFn || root.fetch.bind(root);
-    const json = await getJson(f, `${BASE}?${qs({ q, lat: near.lat, lon: near.lon, lang: 'de', limit: 30 })}`);
+  function sortStores(list, near, limit) {
+    const pc = near && near.postcode ? String(near.postcode) : '';
     const seen = new Set();
-    return features(json).map((x) => normalizeStore(x, near))
+    return list
       .filter((s) => {
         if (!s || !(s.km <= MAX_STORE_KM)) return false;
         const k = s.osmId ? `${s.osmType}${s.osmId}` : `${s.name}|${s.address}`;
@@ -144,11 +180,56 @@
         seen.add(k);
         return true;
       })
-      .sort((a, b) => a.km - b.km)
-      .slice(0, 12);
+      .map((s) => Object.assign(s, { samePostcode: !!(pc && s.postcode === pc) }))
+      .sort((a, b) => (b.samePostcode - a.samePostcode) || (a.km - b.km))
+      .slice(0, limit || 25);
   }
 
-  const api = { BASE, MAX_STORE_KM, distanceKm, formatDistance, placeLabel, normalizePlace, searchPlaces, formatAddress, normalizeStore, searchStores };
+  async function searchStoresOverpass(q, near, f) {
+    let found = [];
+    for (const radius of RADII_M) {
+      const body = `data=${encodeURIComponent(overpassQuery(q, near, radius))}`;
+      const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timer = ctrl ? setTimeout(() => ctrl.abort(), 20000) : null;
+      let json;
+      try {
+        const res = await f(OVERPASS, { method: 'POST', body, headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, signal: ctrl ? ctrl.signal : undefined });
+        if (!res.ok) throw new Error(`Overpass antwortet mit ${res.status}`);
+        json = await res.json();
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+      found = ((json && json.elements) || []).map((el) => normalizeOsmElement(el, near)).filter(Boolean);
+      if (found.length >= ENOUGH) break;
+    }
+    return found;
+  }
+
+  async function searchStoresPhoton(q, near, f) {
+    const json = await getJson(f, `${BASE}?${qs({ q, lat: near.lat, lon: near.lon, lang: 'de', limit: 50 })}`);
+    return features(json).map((x) => normalizeStore(x, near));
+  }
+
+  /**
+   * Märkte in der Nähe eines Ortes suchen, z. B. „Billa“: nur Geschäfte, höchstens
+   * MAX_STORE_KM entfernt, Filialen im eigenen Postleitzahl-Gebiet zuerst, dann die nächsten.
+   * Über Overpass (vollständig im Umkreis); antwortet das nicht, über Photon.
+   */
+  async function searchStores(query, near, fetchFn) {
+    const q = String(query || '').trim();
+    if (q.length < 2 || !near) return [];
+    const f = fetchFn || root.fetch.bind(root);
+    let list;
+    try {
+      list = await searchStoresOverpass(q, near, f);
+    } catch (e) {
+      list = null;
+    }
+    if (!list || !list.length) list = await searchStoresPhoton(q, near, f);
+    return sortStores(list, near);
+  }
+
+  const api = { BASE, OVERPASS, MAX_STORE_KM, normalizeOsmElement, overpassQuery, sortStores, distanceKm, formatDistance, placeLabel, normalizePlace, searchPlaces, formatAddress, normalizeStore, searchStores };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Places = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
