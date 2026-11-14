@@ -15,9 +15,13 @@
   const FRESH_DAYS = 120; // für den „üblichen“ Preis zählen nur jüngere Preise
   const STALE_DAYS = 60; // danach gilt ein Preis als „alt“
 
-  // Häufige Märkte zum schnellen Anlegen (Deutschland und Österreich).
-  const STORE_PRESETS = ['Aldi Süd', 'Aldi Nord', 'Lidl', 'Rewe', 'Edeka', 'Kaufland', 'Penny', 'Netto', 'Norma', 'Globus',
-    'dm', 'Rossmann', 'Müller', 'Hofer', 'Billa', 'Spar'];
+  // Häufige Märkte zum schnellen Anlegen, je Land.
+  const STORE_PRESETS_BY_COUNTRY = {
+    DE: ['Aldi Süd', 'Aldi Nord', 'Lidl', 'Rewe', 'Edeka', 'Kaufland', 'Penny', 'Netto', 'Norma', 'Globus', 'dm', 'Rossmann', 'Müller'],
+    AT: ['Billa', 'Billa Plus', 'Spar', 'Eurospar', 'Interspar', 'Hofer', 'Lidl', 'Penny', 'MPreis', 'Unimarkt', 'dm', 'Bipa', 'Müller'],
+  };
+  const STORE_PRESETS = STORE_PRESETS_BY_COUNTRY.DE.concat(['Hofer', 'Billa', 'Spar']);
+  const storePresets = (country) => STORE_PRESETS_BY_COUNTRY[country] || STORE_PRESETS;
 
   function norm(s) {
     return String(s || '').toLowerCase()
@@ -130,7 +134,7 @@
     };
   }
 
-  const api = { STORE_PRESETS, KEEP_PER_STORE, FRESH_DAYS, STALE_DAYS, norm, priceKey, parseEuro, formatEuro, addPrice, storePrice, compareItem, basket };
+  const api = { STORE_PRESETS, STORE_PRESETS_BY_COUNTRY, storePresets, KEEP_PER_STORE, FRESH_DAYS, STALE_DAYS, norm, priceKey, parseEuro, formatEuro, addPrice, storePrice, compareItem, basket };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Prices = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

@@ -11,7 +11,7 @@ const sample = (over) => Object.assign({
 test('normalisiert einen Preis-Eintrag', () => {
   assert.deepStrictEqual(OP.normalizePrice(sample()), {
     cents: 249, currency: 'EUR', per: null, discounted: false, date: '2026-11-10', product: 'Butter', brand: 'Kerrygold',
-    quantity: '250 g', code: '4012345678901', store: 'Lidl', city: 'Berlin', country: 'DE',
+    quantity: '250 g', code: '4012345678901', store: 'Lidl', city: 'Berlin', osmId: null, country: 'DE',
   });
 });
 

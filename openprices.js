@@ -52,6 +52,7 @@
       code: raw.product_code || product.code || null,
       store,
       city: loc.osm_address_city || null,
+      osmId: loc.osm_id != null ? String(loc.osm_id) : (raw.location_osm_id != null ? String(raw.location_osm_id) : null),
       country: String(loc.osm_address_country_code || '').toUpperCase() || null,
     };
   }

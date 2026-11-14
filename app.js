@@ -2651,6 +2651,25 @@
     return s;
   }
 
+  /** „BILLA PLUS“ → „Billa Plus“; gemischte Schreibweisen bleiben. */
+  function prettyStoreName(name) {
+    const n = String(name || '').trim();
+    if (n.length > 3 && n === n.toUpperCase() && /[A-ZÄÖÜ]{3,}/.test(n)) {
+      return n.toLowerCase().replace(/(^|[\s-])(\p{L})/gu, (m, a, b) => a + b.toUpperCase());
+    }
+    return n;
+  }
+
+  /** Anzeigename eines Marktes – bei mehreren gleichnamigen mit Straße, z. B. „Billa · Margaretenstraße“. */
+  function storeLabel(s) {
+    if (!s) return '';
+    const twins = stores().filter((x) => Pr.norm(x.name) === Pr.norm(s.name));
+    if (twins.length < 2) return s.name;
+    const where = s.street || s.address || s.postcode;
+    return where ? `${s.name} · ${where}` : s.name;
+  }
+  const storeName = (id) => storeLabel(storeById(id));
+
   /** Markt zu einem Namen aus Open Prices finden („LIDL“ ↔ „Lidl“, „Aldi Süd“ ↔ „ALDI“). */
   function matchStore(name) {
     const n = Pr.norm(name);
@@ -2677,24 +2696,24 @@
     const cheapest = cmp[0];
     if (here) {
       const mine = cmp.find((c) => c.storeId === here.id);
-      if (!mine) return `<span class="tile-price">ab ${Pr.formatEuro(cheapest.price.cents)} · ${esc(storeById(cheapest.storeId).name)}</span>`;
+      if (!mine) return `<span class="tile-price">ab ${Pr.formatEuro(cheapest.price.cents)} · ${esc(storeName(cheapest.storeId))}</span>`;
       const better = cheapest.storeId !== here.id && mine.price.cents - cheapest.price.cents >= 5;
       return `<span class="tile-price ${better ? '' : 'good'}">≈ ${Pr.formatEuro(mine.price.cents)}${better ? '' : ' ✓'}</span>${better
-        ? `<span class="tile-price cheaper">💡 ${esc(storeById(cheapest.storeId).name)} ${Pr.formatEuro(cheapest.price.cents)}</span>` : ''}`;
+        ? `<span class="tile-price cheaper">💡 ${esc(storeName(cheapest.storeId))} ${Pr.formatEuro(cheapest.price.cents)}</span>` : ''}`;
     }
-    return `<span class="tile-price">ab ${Pr.formatEuro(cheapest.price.cents)} · ${esc(storeById(cheapest.storeId).name)}</span>`;
+    return `<span class="tile-price">ab ${Pr.formatEuro(cheapest.price.cents)} · ${esc(storeName(cheapest.storeId))}</span>`;
   }
 
   /** Auswahl „Ich kaufe bei“ und der Preisvergleich der offenen Liste. */
   function priceBar(open) {
     const here = shopStore();
-    const chips = stores().map((s) => `<button class="chip ${here && here.id === s.id ? 'on' : ''}" data-action="shop-store" data-id="${s.id}">${esc(s.name)}</button>`).join('');
+    const chips = stores().map((s) => `<button class="chip ${here && here.id === s.id ? 'on' : ''}" data-action="shop-store" data-id="${s.id}">${esc(storeLabel(s))}</button>`).join('');
     let compare = '';
     if (stores().length >= 2 && open.length) {
       const keys = [...new Set(open.map(Pr.priceKey))];
       const b = Pr.basket(allPrices(), keys, storeIds());
       if (b.best) {
-        const nameOf = (id) => esc(storeById(id).name);
+        const nameOf = (id) => esc(storeName(id));
         const missing = keys.length - b.commonKeys.length;
         const assign = b.split && b.split.saving >= 50
           ? b.commonKeys.map((k) => {
@@ -2729,7 +2748,7 @@
     const draw = () => openModal(`
       <h2>💶 ${it.icon} ${esc(it.name)}</h2>
       <p class="small muted">Was hat es gekostet?${it.spec ? ` (${esc(it.spec)})` : ''}</p>
-      <div class="list-chips">${stores().map((s) => `<button class="chip ${s.id === storeId ? 'on' : ''}" data-store="${s.id}">${esc(s.name)}</button>`).join('')}</div>
+      <div class="list-chips">${stores().map((s) => `<button class="chip ${s.id === storeId ? 'on' : ''}" data-store="${s.id}">${esc(storeLabel(s))}</button>`).join('')}</div>
       <form class="form">
         <label>Preis in €<input class="input price-input" name="price" inputmode="decimal" autocomplete="off" placeholder="z. B. 1,79" value="${last() ? Pr.formatEuro(last().cents).replace(' €', '') : ''}"></label>
         <label class="check-label"><input type="checkbox" name="discounted"> War im Angebot</label>
@@ -2751,65 +2770,199 @@
         save();
         closeModal();
         render();
-        toast(`💶 ${it.name}: ${Pr.formatEuro(cents)} bei ${storeById(storeId).name} gemerkt`);
+        toast(`💶 ${it.name}: ${Pr.formatEuro(cents)} bei ${storeName(storeId)} gemerkt`);
       };
     });
     draw();
   }
 
-  /** Märkte verwalten und Ort für Open Prices festlegen. */
+  /** Märkte verwalten: Ort mit Vorschlägen, Filialen in der Nähe mit Adresse (OpenStreetMap). */
   function storesDialog(after) {
-    const draw = () => {
-      const have = new Set(stores().map((s) => Pr.norm(s.name)));
-      const presets = Pr.STORE_PRESETS.filter((n) => !have.has(Pr.norm(n)));
-      const ps = state.settings.prices || {};
-      openModal(`
-        <h2>🏪 Deine Märkte</h2>
-        <p class="small muted">Wo kauft ihr ein? Preise werden je Markt gemerkt und im Haushalt geteilt.</p>
-        ${stores().length ? `<ul class="list">${stores().map((s) => `<li class="row"><div class="row-main"><div class="row-title">${esc(s.name)}</div>
-          <div class="row-sub">${allPrices().filter((p) => p.storeId === s.id).length} Preise</div></div>
-          <button class="icon-btn" data-del="${s.id}" title="Entfernen">✕</button></li>`).join('')}</ul>` : ''}
-        ${presets.length ? `<p class="small muted">Antippen zum Hinzufügen:</p>
-          <div class="chip-grid">${presets.map((n) => `<button class="chip" data-preset="${esc(n)}">＋ ${esc(n)}</button>`).join('')}</div>` : ''}
-        <div class="inline-form quick-other"><input class="input" data-new-store placeholder="Anderer Markt …" maxlength="40"><button class="btn" data-add>＋</button></div>
-        <h3>🌍 Open Prices</h3>
-        <p class="small muted">Für Preise anderer Nutzer aus <a href="https://prices.openfoodfacts.org" target="_blank" rel="noopener">Open Prices</a>: Treffer aus deinem Ort zeigt die App zuerst.</p>
-        <form class="form" data-place>
-          <label>Dein Ort<input class="input" name="city" maxlength="60" value="${esc(ps.city || '')}" placeholder="z. B. München"></label>
-          <label>Land<select class="input" name="country">${[['DE', 'Deutschland'], ['AT', 'Österreich']].map(([c, l]) => `<option value="${c}" ${(ps.country || 'DE') === c ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
-        </form>
-        <button class="btn primary block" data-done>Fertig</button>`, (el) => {
-        const keepPlace = () => {
-          const f = el.querySelector('[data-place]');
-          state.settings.prices = { city: f.city.value.trim(), country: f.country.value };
+    const PL = window.Places;
+    const place = () => state.settings.prices || {};
+    const hasPlace = () => Number.isFinite(place().lat) && Number.isFinite(place().lon);
+    let editPlace = !hasPlace();
+    let placeSeq = 0;
+    let storeSeq = 0;
+    let placeTimer = null;
+    let storeTimer = null;
+    let storeResults = [];
+    let storeQuery = '';
+
+    openModal(`
+      <h2>🏪 Deine Märkte</h2>
+      <h3>📍 Dein Ort</h3>
+      <div data-place-box></div>
+      <h3>Märkte</h3>
+      <p class="small muted">Preise werden je Markt gemerkt und im Haushalt geteilt.</p>
+      <div data-store-list></div>
+      <div class="inline-form quick-other"><input class="input" type="search" data-store-q maxlength="40" autocomplete="off" placeholder="Markt suchen, z. B. Billa"></div>
+      <div data-store-results></div>
+      <div class="chip-grid" data-presets></div>
+      <p class="tiny muted">Orte & Märkte: © OpenStreetMap-Mitwirkende (Suche über Photon). Preise anderer: Open Prices.</p>
+      <button class="btn primary block" data-done>Fertig</button>`, (el) => {
+      const placeBox = el.querySelector('[data-place-box]');
+      const list = el.querySelector('[data-store-list]');
+      const results = el.querySelector('[data-store-results]');
+      const presets = el.querySelector('[data-presets]');
+      const q = el.querySelector('[data-store-q]');
+
+      const drawPlace = () => {
+        const p = place();
+        if (!editPlace && hasPlace()) {
+          placeBox.innerHTML = `<div class="place-chosen"><span>✓ <strong>${esc(p.label || p.city)}</strong></span>
+            <button class="link" data-place-edit>ändern</button></div>`;
+          placeBox.querySelector('[data-place-edit]').onclick = () => { editPlace = true; drawPlace(); placeBox.querySelector('[data-place-q]').focus(); };
+          return;
+        }
+        placeBox.innerHTML = `
+          <div class="place-row">
+            <input class="input" type="search" data-place-q autocomplete="off" placeholder="PLZ oder Ort, z. B. 1050" value="${esc(p.label || p.city || '')}">
+            <select class="input" data-country>${[['AT', '🇦🇹'], ['DE', '🇩🇪']].map(([c, f]) => `<option value="${c}" ${(p.country || 'AT') === c ? 'selected' : ''}>${f} ${c}</option>`).join('')}</select>
+          </div>
+          <div data-place-results></div>`;
+        const input = placeBox.querySelector('[data-place-q]');
+        const out = placeBox.querySelector('[data-place-results]');
+        const country = placeBox.querySelector('[data-country]');
+        const search = () => {
+          clearTimeout(placeTimer);
+          const text = input.value.trim();
+          if (text.length < 2) { out.innerHTML = ''; return; }
+          out.innerHTML = '<p class="small muted">Suche …</p>';
+          const seq = ++placeSeq;
+          placeTimer = setTimeout(async () => {
+            let found = [];
+            try { found = await PL.searchPlaces(text, { country: country.value }); } catch (e) {
+              if (seq === placeSeq) out.innerHTML = '<p class="small bad-text">Ortssuche gerade nicht erreichbar – bist du online?</p>';
+              return;
+            }
+            if (seq !== placeSeq) return; // inzwischen weitergetippt
+            out.innerHTML = found.length
+              ? `<div class="suggest">${found.map((f, i) => `<button class="suggest-row" data-pick-place="${i}">📍 ${esc(f.label)}</button>`).join('')}</div>`
+              : '<p class="small muted">Nichts gefunden – versuch es mit Postleitzahl oder Ortsname.</p>';
+            out.querySelectorAll('[data-pick-place]').forEach((b) => {
+              b.onclick = () => {
+                const f = found[Number(b.dataset.pickPlace)];
+                state.settings.prices = { label: f.label, city: f.city || f.label, district: f.district, postcode: f.postcode, country: f.country || country.value, lat: f.lat, lon: f.lon };
+                save();
+                editPlace = false;
+                drawPlace();
+                drawList();
+                drawPresets();
+                if (storeQuery) searchStores();
+              };
+            });
+          }, 400);
         };
-        el.querySelectorAll('[data-preset]').forEach((b) => { b.onclick = () => { keepPlace(); addStore(b.dataset.preset); save(); draw(); }; });
-        el.querySelectorAll('[data-del]').forEach((b) => {
+        input.oninput = search;
+        if (input.value.trim().length >= 2) search(); // schon eingetragener Ort (z. B. „1050“): gleich Vorschläge zeigen
+        country.onchange = () => { state.settings.prices = Object.assign({}, place(), { country: country.value }); save(); search(); };
+      };
+
+      const drawList = () => {
+        const p = place();
+        list.innerHTML = stores().length ? `<ul class="list">${stores().map((s) => {
+          const km = hasPlace() && Number.isFinite(s.lat) ? PL.distanceKm(p, s) : NaN;
+          return `<li class="row"><div class="row-main"><div class="row-title">${esc(s.name)}</div>
+            <div class="row-sub">${s.address ? esc(s.address) : 'ohne Adresse'}${Number.isFinite(km) ? ` · ${PL.formatDistance(km)}` : ''} · ${allPrices().filter((x) => x.storeId === s.id).length} Preise</div></div>
+            <button class="icon-btn" data-del="${s.id}" title="Entfernen">✕</button></li>`;
+        }).join('')}</ul>` : '<p class="small muted">Noch keine Märkte.</p>';
+        list.querySelectorAll('[data-del]').forEach((b) => {
           b.onclick = () => {
             const s = storeById(b.dataset.del);
-            if (!confirm(`„${s.name}“ mit allen gemerkten Preisen entfernen?`)) return;
-            keepPlace();
+            if (!confirm(`„${storeLabel(s)}“ mit allen gemerkten Preisen entfernen?`)) return;
             state.stores = stores().filter((x) => x.id !== s.id);
-            state.prices = allPrices().filter((p) => p.storeId !== s.id);
+            state.prices = allPrices().filter((x) => x.storeId !== s.id);
             if (ui.shopStoreId === s.id) setShopStore(null);
             save();
-            draw();
+            drawList();
+            drawResults();
           };
         });
-        const input = el.querySelector('[data-new-store]');
-        const add = () => { if (!input.value.trim()) return; keepPlace(); addStore(input.value); save(); draw(); };
-        el.querySelector('[data-add]').onclick = add;
-        input.onkeydown = (ev) => { if (ev.key === 'Enter') add(); };
-        el.querySelector('[data-done]').onclick = () => {
-          keepPlace();
+      };
+
+      const drawResults = () => {
+        if (!storeQuery) { results.innerHTML = ''; return; }
+        const have = new Set(stores().map((s) => s.osmId).filter(Boolean));
+        const rows = storeResults.map((r, i) => `<li class="row">
+            <div class="row-main"><div class="row-title">${esc(prettyStoreName(r.name))}</div>
+              <div class="row-sub">${esc(r.address || 'Adresse unbekannt')}${Number.isFinite(r.km) ? ` · ${PL.formatDistance(r.km)}` : ''}</div></div>
+            ${r.osmId && have.has(r.osmId) ? '<span class="good-text">✓</span>' : `<button class="btn" data-add-found="${i}">＋</button>`}</li>`).join('');
+        results.innerHTML = `${hasPlace() ? '' : '<p class="small muted">💡 Gib oben deinen Ort ein, dann siehst du die Filialen in deiner Nähe mit Adresse.</p>'}
+          ${rows ? `<ul class="list found-list">${rows}</ul>` : ''}
+          <button class="link" data-add-plain>＋ „${esc(storeQuery)}“ ohne Adresse hinzufügen</button>`;
+        results.querySelectorAll('[data-add-found]').forEach((b) => {
+          b.onclick = () => {
+            const r = storeResults[Number(b.dataset.addFound)];
+            stores().push({
+              id: uid(), name: prettyStoreName(r.name), address: r.address, street: r.street, postcode: r.postcode, city: r.city,
+              lat: r.lat, lon: r.lon, osmId: r.osmId, osmType: r.osmType,
+            });
+            save();
+            drawList();
+            drawResults();
+            toast(`🏪 ${prettyStoreName(r.name)}, ${r.street || r.address} hinzugefügt`);
+          };
+        });
+        results.querySelector('[data-add-plain]').onclick = () => {
+          addStore(storeQuery);
           save();
-          closeModal();
-          render();
-          if (after && stores().length) after();
+          q.value = '';
+          storeQuery = '';
+          storeResults = [];
+          drawList();
+          drawResults();
+          drawPresets();
         };
-      });
-    };
-    draw();
+      };
+
+      const searchStores = () => {
+        clearTimeout(storeTimer);
+        storeQuery = q.value.trim();
+        storeResults = [];
+        if (storeQuery.length < 2 || !hasPlace()) { drawResults(); return; }
+        results.innerHTML = '<p class="small muted">Suche Filialen in deiner Nähe …</p>';
+        const seq = ++storeSeq;
+        storeTimer = setTimeout(async () => {
+          let found = [];
+          try { found = await PL.searchStores(storeQuery, place()); } catch (e) {
+            if (seq === storeSeq) results.innerHTML = '<p class="small bad-text">Suche gerade nicht erreichbar – bist du online?</p>';
+            return;
+          }
+          if (seq !== storeSeq) return;
+          storeResults = found;
+          drawResults();
+          if (!found.length) results.insertAdjacentHTML('afterbegin', `<p class="small muted">Keine Filiale „${esc(storeQuery)}“ in deiner Nähe gefunden.</p>`);
+        }, 400);
+      };
+      q.oninput = searchStores;
+
+      const drawPresets = () => {
+        const have = new Set(stores().map((s) => Pr.norm(s.name)));
+        const list2 = Pr.storePresets(place().country).filter((n) => hasPlace() || !have.has(Pr.norm(n)));
+        presets.innerHTML = `<p class="small muted full">${hasPlace() ? 'Oder Kette antippen und Filiale wählen:' : 'Oder antippen zum Hinzufügen:'}</p>
+          ${list2.map((n) => `<button class="chip" data-preset="${esc(n)}">${hasPlace() ? '🔍' : '＋'} ${esc(n)}</button>`).join('')}`;
+        presets.querySelectorAll('[data-preset]').forEach((b) => {
+          b.onclick = () => {
+            if (hasPlace()) { q.value = b.dataset.preset; searchStores(); q.scrollIntoView({ block: 'start', behavior: 'smooth' }); return; }
+            addStore(b.dataset.preset);
+            save();
+            drawList();
+            drawPresets();
+          };
+        });
+      };
+
+      drawPlace();
+      drawList();
+      drawPresets();
+      el.querySelector('[data-done]').onclick = () => {
+        save();
+        closeModal();
+        render();
+        if (after && stores().length) after();
+      };
+    });
   }
 
   /** Preise eines Artikels: eigene je Markt und – auf Wunsch – Open Prices. */
@@ -2822,7 +2975,7 @@
     }
     const cmp = Pr.compareItem(allPrices(), Pr.priceKey(it), storeIds());
     return `<div class="price-section"><h3>💶 Preise</h3>
-      ${cmp.length ? `<ul class="price-rank">${cmp.map((c, i) => `<li class="${i === 0 && cmp.length > 1 ? 'best' : ''}"><span>${esc(storeById(c.storeId).name)}
+      ${cmp.length ? `<ul class="price-rank">${cmp.map((c, i) => `<li class="${i === 0 && cmp.length > 1 ? 'best' : ''}"><span>${esc(storeName(c.storeId))}
           <small class="muted">· ${new Date(c.price.at).toLocaleDateString('de-DE', { day: 'numeric', month: 'short' })}${c.price.stale ? ' · alt' : ''}</small></span>
           <span>${Pr.formatEuro(c.price.cents)}</span></li>`).join('')}</ul>` : '<p class="small muted">Noch kein Preis gemerkt.</p>'}
       <div class="btn-row"><button type="button" class="btn" data-add-price>＋ Preis eintragen</button>
@@ -2867,7 +3020,8 @@
       el.querySelectorAll('[data-take]').forEach((b) => {
         b.onclick = () => {
           const r = results[Number(b.dataset.take)];
-          let s = matchStore(r.store);
+          // Gleiche Filiale über die OpenStreetMap-Kennung, sonst über den Namen.
+          let s = (r.osmId && stores().find((x) => x.osmId && String(x.osmId) === r.osmId)) || matchStore(r.store);
           if (!s) {
             if (!confirm(`„${r.store}“ als neuen Markt anlegen und den Preis dort merken?`)) return;
             s = addStore(r.store);
