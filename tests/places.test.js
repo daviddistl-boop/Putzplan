@@ -17,10 +17,11 @@ test('Ort: echte Photon-Antwort für „1050“ (Postleitzahl nur als Name, Kata
   assert.deepStrictEqual([graz.label, graz.postcode], ['Graz, Innere Stadt, 8010', '8010']);
 });
 
-test('Ort: Stadt und Bezirk, Straßen werden aussortiert', () => {
+test('Ort: Stadt und Bezirk, sonstige Treffer werden aussortiert', () => {
   assert.strictEqual(PL.normalizePlace(feature({ osm_key: 'place', osm_value: 'city', type: 'city', name: 'Graz', countrycode: 'AT' }, 15.43, 47.07)).label, 'Graz');
   assert.strictEqual(PL.normalizePlace(feature({ osm_key: 'place', osm_value: 'suburb', type: 'district', name: 'Margareten', city: 'Wien', countrycode: 'AT' }, 16.35, 48.18)).label, 'Wien, Margareten');
-  assert.strictEqual(PL.normalizePlace(feature({ osm_key: 'highway', osm_value: 'residential', type: 'street', name: 'Hauptstraße', city: 'Wien' }, 16, 48)), null);
+  assert.strictEqual(PL.normalizePlace(feature({ osm_key: 'amenity', osm_value: 'restaurant', type: 'other', name: 'Zum Hirschen', city: 'Wien' }, 16, 48)), null);
+  assert.strictEqual(PL.normalizePlace(feature({ osm_key: 'highway', osm_value: 'residential', type: 'street', name: 'Hauptstraße', city: 'Wien' }, 16, 48)).label, 'Hauptstraße, Wien');
   assert.strictEqual(PL.normalizePlace({ properties: { type: 'city', name: 'X' } }), null);
 });
 
@@ -118,4 +119,28 @@ test('Rückwärtssuche: Koordinaten → Postleitzahl und Bezirk (echte Photon-An
   const street = await PL.reversePlace(48.1, 16.3, async () => ({ ok: true, json: async () => ({ features: [feature({ osm_key: 'highway', type: 'street', name: 'Pilgramgasse', postcode: '1050', city: 'Wien', countrycode: 'AT' }, 16.3, 48.1)] }) }));
   assert.strictEqual(street.label, 'Wien, Margareten, 1050');
   assert.strictEqual(await PL.reversePlace(48.1, 16.3, async () => ({ ok: true, json: async () => ({ features: [] }) })), null);
+});
+
+test('Adresse als Ort (echte Photon-Antworten): Hausnummer, Straße, Haltestelle ohne Nummer', async () => {
+  const base = { locality: 'Reinprechtsdorf', district: 'Katastralgemeinde Margarethen', city: 'Wien', country: 'Österreich', postcode: '1050', countrycode: 'AT' };
+  const fake = async () => ({ ok: true, json: async () => ({ features: [
+    feature(Object.assign({ osm_key: 'railway', osm_value: 'station', type: 'house', name: 'Pilgramgasse', street: 'Rechte Wienzeile' }, base), 16.3543, 48.1921),
+    feature(Object.assign({ osm_key: 'amenity', osm_value: 'vending_machine', type: 'house', housenumber: '10', street: 'Pilgramgasse' }, base), 16.3569, 48.1920),
+    feature(Object.assign({ osm_key: 'building', osm_value: 'apartments', type: 'house', housenumber: '10', street: 'Pilgramgasse' }, base), 16.35695, 48.19202),
+    feature(Object.assign({ osm_key: 'highway', osm_value: 'tertiary', type: 'street', name: 'Reinprechtsdorfer Straße' }, base), 16.3521, 48.1879),
+  ] }) });
+  const r = await PL.searchPlaces('Pilgramgasse 10', { country: 'AT' }, fake);
+  assert.deepStrictEqual(r.map((p) => p.label), ['Pilgramgasse 10, 1050 Wien', 'Reinprechtsdorfer Straße, 1050 Wien']);
+  assert.deepStrictEqual([r[0].exact, r[0].postcode, r[0].district], [true, '1050', 'Margareten']);
+});
+
+test('Filialsuche mit Adresse: nur nach Entfernung, keine PLZ-Gruppe', async () => {
+  const fake = photonOnly([
+    shop(1, 'Triester Straße', '1100', 16.3555, 48.1806),
+    shop(2, 'Reinprechtsdorfer Straße', '1050', 16.3546, 48.1889),
+    shop(3, 'Rechte Wienzeile', '1040', 16.3549, 48.1868),
+  ]);
+  const r = await PL.searchStores('billa', Object.assign({}, NEAR, { lat: 48.1860, lon: 16.3550, exact: true }), fake);
+  assert.deepStrictEqual(r.map((s) => s.osmId), ['3', '2', '1']);
+  assert.ok(r.every((s) => !s.samePostcode));
 });

@@ -83,6 +83,8 @@
   function normalizePlace(f) {
     const p = (f && f.properties) || {};
     const type = p.type || p.osm_value;
+    const address = addressPlace(f, p, type);
+    if (address !== undefined) return address;
     if (!PLACE_TYPES.includes(type) && !(p.osm_key === 'place') && !(p.osm_key === 'boundary' && p.postcode)) return null;
     const { lat, lon } = coords(f);
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
@@ -99,7 +101,32 @@
     };
   }
 
-  /** Ort suchen: „1050“, „Margareten“, „Graz“ … `country` filtert auf ein Land (z. B. AT). */
+  /**
+   * Adresse („Pilgramgasse 10“) oder Straße als Ort → wie normalizePlace, mit exact: true
+   * (dann zählt bei Märkten nur die Entfernung). undefined = kein Adress-Treffer.
+   */
+  function addressPlace(f, p, type) {
+    if (type !== 'house' && type !== 'street') return undefined;
+    const street = type === 'house' ? p.street : p.name;
+    if (!street || (type === 'house' && !p.housenumber)) return null; // z. B. Haltestelle ohne Hausnummer
+    const { lat, lon } = coords(f);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    const city = p.city || p.county || '';
+    const postcode = p.postcode || '';
+    const s = { street, housenumber: type === 'house' ? String(p.housenumber) : '', postcode, city };
+    return {
+      label: formatAddress(s),
+      city,
+      district: districtOf(p, city),
+      postcode,
+      country: String(p.countrycode || '').toUpperCase(),
+      lat,
+      lon,
+      exact: true,
+    };
+  }
+
+  /** Ort suchen: „1050“, „Margareten“, „Graz“, „Pilgramgasse 10“ … `country` filtert auf ein Land (z. B. AT). */
   async function searchPlaces(query, opts, fetchFn) {
     const q = String(query || '').trim();
     if (q.length < 2) return [];
@@ -164,7 +191,8 @@
    * Doppelte (gleiche OSM-Kennung oder gleicher Name an gleicher Adresse) fliegen raus.
    */
   function sortStores(list, near, limit) {
-    const pc = near && near.postcode ? String(near.postcode) : '';
+    // Mit genauer Adresse zählt nur die Entfernung, sonst kommt die eigene PLZ zuerst.
+    const pc = near && near.postcode && !near.exact ? String(near.postcode) : '';
     const seen = new Set();
     return list
       .filter((s) => {

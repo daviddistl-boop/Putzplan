@@ -2817,10 +2817,11 @@
         }
         placeBox.innerHTML = `
           <div class="place-row">
-            <input class="input" type="search" data-place-q autocomplete="off" placeholder="PLZ oder Ort, z. B. 1050" value="${esc(p.label || p.city || '')}">
+            <input class="input" type="search" data-place-q autocomplete="off" placeholder="PLZ, Ort oder Adresse, z. B. 1050" value="${esc(p.label || p.city || '')}">
             <select class="input" data-country>${[['AT', '🇦🇹'], ['DE', '🇩🇪']].map(([c, f]) => `<option value="${c}" ${(p.country || 'AT') === c ? 'selected' : ''}>${f} ${c}</option>`).join('')}</select>
           </div>
-          <div data-place-results></div>`;
+          <div data-place-results></div>
+          <p class="tiny muted">Tipp: Mit deiner Adresse (z. B. „Pilgramgasse 10“) siehst du genau, welcher Markt am nächsten ist.</p>`;
         const input = placeBox.querySelector('[data-place-q]');
         const out = placeBox.querySelector('[data-place-results]');
         const country = placeBox.querySelector('[data-country]');
@@ -2843,7 +2844,7 @@
             out.querySelectorAll('[data-pick-place]').forEach((b) => {
               b.onclick = () => {
                 const f = found[Number(b.dataset.pickPlace)];
-                state.settings.prices = { label: f.label, city: f.city || f.label, district: f.district, postcode: f.postcode, country: f.country || country.value, lat: f.lat, lon: f.lon };
+                state.settings.prices = { label: f.label, city: f.city || f.label, district: f.district, postcode: f.postcode, country: f.country || country.value, lat: f.lat, lon: f.lon, exact: !!f.exact };
                 save();
                 editPlace = false;
                 drawPlace();

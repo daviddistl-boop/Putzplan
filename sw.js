@@ -1,7 +1,7 @@
 // Putzplan – Service Worker: Offline-Betrieb und tägliche Erinnerungen.
 importScripts('scheduler.js', 'shared.js');
 
-const CACHE = 'putzplan-v10';
+const CACHE = 'putzplan-v11';
 const ASSETS = [
   './', 'index.html', 'styles.css', 'app.js', 'scheduler.js', 'plants.js', 'shopping.js', 'prices.js', 'openprices.js', 'places.js', 'templates.js', 'shared.js', 'native.js', 'sync.js', 'cloud.js', 'feedback.js', 'vendor/supabase.js', 'manifest.webmanifest',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png',
