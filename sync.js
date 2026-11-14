@@ -25,6 +25,8 @@
     { key: 'history', kind: 'history' },
     { key: 'shoppingLists', kind: 'list', ordered: true },
     { key: 'shoppingItems', kind: 'item' },
+    { key: 'stores', kind: 'store', ordered: true },
+    { key: 'prices', kind: 'price' },
   ];
   const SETTINGS_ID = 'main';
   // Persönliche Einstellungen: bleiben auf dem Gerät.

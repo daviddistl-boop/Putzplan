@@ -28,6 +28,8 @@
       plants: [],
       shoppingLists: [],
       shoppingItems: [],
+      stores: [],
+      prices: [],
       history: [],
       settings: { minutesPerWeekday: [20, 20, 20, 20, 20, 60, 0], perPersonBudget: true },
     };
@@ -210,9 +212,10 @@
   let toastTimer;
   function toast(msg, action) {
     const el = document.getElementById('toast');
-    el.innerHTML = `<span>${esc(msg)}</span>${action ? `<button class="toast-btn" data-toast-action>${esc(action.label)}</button>` : ''}`;
+    const actions = Array.isArray(action) ? action : action ? [action] : [];
+    el.innerHTML = `<span>${esc(msg)}</span>${actions.map((a, i) => `<button class="toast-btn" data-toast-action="${i}">${esc(a.label)}</button>`).join('')}`;
     el.hidden = false;
-    if (action) el.querySelector('[data-toast-action]').onclick = () => { action.run(); el.hidden = true; };
+    el.querySelectorAll('[data-toast-action]').forEach((b) => { b.onclick = () => { actions[Number(b.dataset.toastAction)].run(); el.hidden = true; }; });
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => { el.hidden = true; }, 4500);
   }
@@ -2400,7 +2403,8 @@
     pruneShopItems(it.listId);
     save();
     render();
-    toast(`${it.icon} ${it.name} gekauft`, { label: 'Rückgängig', run: () => { it.done = false; it.doneAt = null; save(); render(); } });
+    const undo = { label: 'Rückgängig', run: () => { it.done = false; it.doneAt = null; save(); render(); } };
+    toast(`${it.icon} ${it.name} gekauft`, stores().length ? [{ label: '💶 Preis', run: () => priceDialog(it.id) }, undo] : undo);
   }
 
   function shopTile(it, mode) {
@@ -2410,6 +2414,7 @@
       <span class="tile-icon">${it.icon}</span>
       <span class="tile-name">${esc(it.name)}</span>
       ${it.spec ? `<span class="tile-spec">${esc(it.spec)}</span>` : ''}
+      ${mode === 'open' ? priceHint(it) : ''}
       ${mode === 'open' && m && state.members.length > 1 ? `<span class="tile-who" style="background:${m.color}" title="Hinzugefügt von ${esc(m.name)}">${esc(m.name.charAt(0).toUpperCase())}</span>` : ''}
       ${mode === 'open' ? `<button class="tile-edit" data-action="shop-edit" data-id="${it.id}" title="Bearbeiten">✎</button>` : ''}
     </div>`;
@@ -2456,6 +2461,7 @@
         <button class="chip" data-action="shop-list-new" title="Neue Liste">＋</button>
         <button class="chip" data-action="shop-list-edit" title="Liste bearbeiten">✎</button>
       </div>
+      ${priceBar(open)}
       <div class="shop-add"><input class="input" type="search" data-shop-q placeholder="🔍 Was brauchst du?" value="${esc(ui.shopQuery || '')}" enterkeyhint="done"></div>
       <div data-shop-suggest>${shopSuggestions(ui.shopQuery)}</div>
       ${byCat.length ? byCat.map((g) => `<section class="shop-cat"><h3>${g.c.icon} ${g.c.name}</h3>
@@ -2493,6 +2499,7 @@
         <label>Kategorie<select class="input" name="cat">${Sh.CATEGORIES.map((c) => `<option value="${c.key}" ${c.key === (it.cat || 'other') ? 'selected' : ''}>${c.icon} ${c.name}</option>`).join('')}</select></label>
         ${lists.length > 1 ? `<label>Liste<select class="input" name="listId">${lists.map((l) => `<option value="${l.id}" ${l.id === it.listId ? 'selected' : ''}>${l.icon} ${esc(l.name)}</option>`).join('')}</select></label>` : ''}
         ${it.addedBy && member(it.addedBy) ? `<p class="small muted">Hinzugefügt von ${esc(member(it.addedBy).name)}</p>` : ''}
+        ${pricesSection(it)}
         <div class="btn-row">
           <button type="button" class="btn danger" data-del>Entfernen</button>
           <button type="button" class="btn" data-cancel>Abbrechen</button>
@@ -2504,6 +2511,10 @@
         state.shoppingItems = state.shoppingItems.filter((x) => x.id !== id);
         save(); closeModal(); render();
       };
+      const on = (sel, fn) => { const b = el.querySelector(sel); if (b) b.onclick = fn; };
+      on('[data-add-price]', () => priceDialog(id));
+      on('[data-open-prices]', () => openPricesDialog(id));
+      on('[data-price-stores]', () => storesDialog(() => shopItemDialog(id)));
       el.querySelector('form').onsubmit = (ev) => {
         ev.preventDefault();
         const f = ev.target;
@@ -2597,6 +2608,277 @@
       el.querySelector('[data-close-quick]').onclick = () => { closeModal(); render(); };
     });
     draw();
+  }
+
+  // ---------------------------------------------------------------- Preise & Märkte
+  //
+  // Preisgedächtnis für die Einkaufsliste: Beim Einkaufen trägt man ein, was ein Artikel in
+  // welchem Markt gekostet hat (geteilt im Haushalt). Daraus zeigt die App, wo die Liste am
+  // günstigsten ist. Ergänzend kann man in Open Prices nachsehen, was andere bezahlt haben.
+
+  const Pr = window.Prices;
+  const OP = window.OpenPrices;
+  const SHOP_STORE_KEY = 'putzplan.shopStore';
+
+  function stores() {
+    if (!Array.isArray(state.stores)) state.stores = [];
+    return state.stores;
+  }
+  function allPrices() {
+    if (!Array.isArray(state.prices)) state.prices = [];
+    return state.prices;
+  }
+  const storeById = (id) => byId(stores(), id);
+  const storeIds = () => stores().map((s) => s.id);
+
+  /** Markt, in dem man gerade einkauft (nur auf diesem Gerät gemerkt). */
+  function shopStore() {
+    if (ui.shopStoreId === undefined) ui.shopStoreId = lsGet(SHOP_STORE_KEY) || null;
+    return ui.shopStoreId ? storeById(ui.shopStoreId) : null;
+  }
+  function setShopStore(id) {
+    ui.shopStoreId = id || null;
+    lsSet(SHOP_STORE_KEY, id || '');
+  }
+
+  function addStore(name) {
+    const n = name.trim();
+    if (!n) return null;
+    const existing = stores().find((s) => Pr.norm(s.name) === Pr.norm(n));
+    if (existing) return existing;
+    const s = { id: uid(), name: n.slice(0, 40) };
+    stores().push(s);
+    return s;
+  }
+
+  /** Markt zu einem Namen aus Open Prices finden („LIDL“ ↔ „Lidl“, „Aldi Süd“ ↔ „ALDI“). */
+  function matchStore(name) {
+    const n = Pr.norm(name);
+    if (!n) return null;
+    return stores().find((s) => Pr.norm(s.name) === n)
+      || stores().find((s) => n.startsWith(Pr.norm(s.name)) || Pr.norm(s.name).startsWith(n)) || null;
+  }
+
+  function savePrice(it, storeId, cents, opts) {
+    const o = opts || {};
+    state.prices = Pr.addPrice(allPrices(), {
+      id: uid(), key: Pr.priceKey(it), name: it.name, storeId, cents,
+      at: o.at || Date.now(), by: myMemberId() || null, source: o.source || 'me', discounted: !!o.discounted,
+    });
+  }
+
+  /** Kurzer Preis-Hinweis an einer Kachel. */
+  function priceHint(it) {
+    if (!stores().length) return '';
+    const key = Pr.priceKey(it);
+    const cmp = Pr.compareItem(allPrices(), key, storeIds());
+    if (!cmp.length) return '';
+    const here = shopStore();
+    const cheapest = cmp[0];
+    if (here) {
+      const mine = cmp.find((c) => c.storeId === here.id);
+      if (!mine) return `<span class="tile-price">ab ${Pr.formatEuro(cheapest.price.cents)} · ${esc(storeById(cheapest.storeId).name)}</span>`;
+      const better = cheapest.storeId !== here.id && mine.price.cents - cheapest.price.cents >= 5;
+      return `<span class="tile-price ${better ? '' : 'good'}">≈ ${Pr.formatEuro(mine.price.cents)}${better ? '' : ' ✓'}</span>${better
+        ? `<span class="tile-price cheaper">💡 ${esc(storeById(cheapest.storeId).name)} ${Pr.formatEuro(cheapest.price.cents)}</span>` : ''}`;
+    }
+    return `<span class="tile-price">ab ${Pr.formatEuro(cheapest.price.cents)} · ${esc(storeById(cheapest.storeId).name)}</span>`;
+  }
+
+  /** Auswahl „Ich kaufe bei“ und der Preisvergleich der offenen Liste. */
+  function priceBar(open) {
+    const here = shopStore();
+    const chips = stores().map((s) => `<button class="chip ${here && here.id === s.id ? 'on' : ''}" data-action="shop-store" data-id="${s.id}">${esc(s.name)}</button>`).join('');
+    let compare = '';
+    if (stores().length >= 2 && open.length) {
+      const keys = [...new Set(open.map(Pr.priceKey))];
+      const b = Pr.basket(allPrices(), keys, storeIds());
+      if (b.best) {
+        const nameOf = (id) => esc(storeById(id).name);
+        const missing = keys.length - b.commonKeys.length;
+        const assign = b.split && b.split.saving >= 50
+          ? b.commonKeys.map((k) => {
+            const c = Pr.compareItem(allPrices(), k, b.split.stores)[0];
+            const it = open.find((i) => Pr.priceKey(i) === k);
+            return `<li>${it ? `${it.icon} ${esc(it.name)}` : esc(k)} → ${nameOf(c.storeId)} ${Pr.formatEuro(c.price.cents)}</li>`;
+          }).join('') : '';
+        compare = `<div class="price-panel">
+          <strong>💶 Am günstigsten: ${nameOf(b.best.storeId)}</strong>
+          <ul class="price-rank">${b.common.map((c, i) => `<li class="${i === 0 ? 'best' : ''}"><span>${nameOf(c.storeId)}</span><span>${Pr.formatEuro(c.total)}${i ? ` <small class="muted">+${Pr.formatEuro(c.total - b.common[0].total)}</small>` : ''}</span></li>`).join('')}</ul>
+          <p class="small muted">Verglichen über ${b.commonKeys.length} Artikel mit Preisen in allen Märkten${missing ? ` · für ${missing} fehlen noch Preise` : ''}.</p>
+          ${assign ? `<details class="follow"><summary>✂️ Aufteilen spart ${Pr.formatEuro(b.split.saving)}</summary><ul class="small">${assign}</ul></details>` : ''}
+        </div>`;
+      } else {
+        compare = '<p class="small muted price-tip">💡 Trag beim Einkaufen Preise ein – sobald dieselben Artikel aus zwei Märkten bekannt sind, zeigt die App, wo deine Liste am günstigsten ist.</p>';
+      }
+    }
+    return `<div class="price-bar">
+        <div class="list-chips"><span class="small muted">🏪 Ich kaufe bei:</span>${chips}
+          <button class="chip" data-action="shop-stores" title="Märkte verwalten">${stores().length ? '⚙️' : '＋ Markt'}</button></div>
+        ${compare}
+      </div>`;
+  }
+
+  /** Preis eintragen: Markt wählen, Betrag eingeben. */
+  function priceDialog(id, presetStoreId) {
+    const it = shopItem(id);
+    if (!it) return;
+    if (!stores().length) { storesDialog(() => priceDialog(id, presetStoreId)); return; }
+    let storeId = presetStoreId || (shopStore() || {}).id || stores()[0].id;
+    const last = () => Pr.storePrice(allPrices(), Pr.priceKey(it), storeId);
+    const draw = () => openModal(`
+      <h2>💶 ${it.icon} ${esc(it.name)}</h2>
+      <p class="small muted">Was hat es gekostet?${it.spec ? ` (${esc(it.spec)})` : ''}</p>
+      <div class="list-chips">${stores().map((s) => `<button class="chip ${s.id === storeId ? 'on' : ''}" data-store="${s.id}">${esc(s.name)}</button>`).join('')}</div>
+      <form class="form">
+        <label>Preis in €<input class="input price-input" name="price" inputmode="decimal" autocomplete="off" placeholder="z. B. 1,79" value="${last() ? Pr.formatEuro(last().cents).replace(' €', '') : ''}"></label>
+        <label class="check-label"><input type="checkbox" name="discounted"> War im Angebot</label>
+        <p class="small bad-text" data-err hidden>Bitte einen Preis wie 1,79 eingeben.</p>
+        <div class="btn-row">
+          <button type="button" class="btn" data-cancel>Abbrechen</button>
+          <button type="submit" class="btn primary">Speichern</button>
+        </div>
+      </form>`, (el) => {
+      el.querySelectorAll('[data-store]').forEach((b) => { b.onclick = () => { storeId = b.dataset.store; draw(); }; });
+      el.querySelector('[data-cancel]').onclick = closeModal;
+      const form = el.querySelector('form');
+      setTimeout(() => { form.price.focus(); form.price.select(); }, 50);
+      form.onsubmit = (ev) => {
+        ev.preventDefault();
+        const cents = Pr.parseEuro(form.price.value);
+        if (!cents) { el.querySelector('[data-err]').hidden = false; return; }
+        savePrice(it, storeId, cents, { discounted: form.discounted.checked });
+        save();
+        closeModal();
+        render();
+        toast(`💶 ${it.name}: ${Pr.formatEuro(cents)} bei ${storeById(storeId).name} gemerkt`);
+      };
+    });
+    draw();
+  }
+
+  /** Märkte verwalten und Ort für Open Prices festlegen. */
+  function storesDialog(after) {
+    const draw = () => {
+      const have = new Set(stores().map((s) => Pr.norm(s.name)));
+      const presets = Pr.STORE_PRESETS.filter((n) => !have.has(Pr.norm(n)));
+      const ps = state.settings.prices || {};
+      openModal(`
+        <h2>🏪 Deine Märkte</h2>
+        <p class="small muted">Wo kauft ihr ein? Preise werden je Markt gemerkt und im Haushalt geteilt.</p>
+        ${stores().length ? `<ul class="list">${stores().map((s) => `<li class="row"><div class="row-main"><div class="row-title">${esc(s.name)}</div>
+          <div class="row-sub">${allPrices().filter((p) => p.storeId === s.id).length} Preise</div></div>
+          <button class="icon-btn" data-del="${s.id}" title="Entfernen">✕</button></li>`).join('')}</ul>` : ''}
+        ${presets.length ? `<p class="small muted">Antippen zum Hinzufügen:</p>
+          <div class="chip-grid">${presets.map((n) => `<button class="chip" data-preset="${esc(n)}">＋ ${esc(n)}</button>`).join('')}</div>` : ''}
+        <div class="inline-form quick-other"><input class="input" data-new-store placeholder="Anderer Markt …" maxlength="40"><button class="btn" data-add>＋</button></div>
+        <h3>🌍 Open Prices</h3>
+        <p class="small muted">Für Preise anderer Nutzer aus <a href="https://prices.openfoodfacts.org" target="_blank" rel="noopener">Open Prices</a>: Treffer aus deinem Ort zeigt die App zuerst.</p>
+        <form class="form" data-place>
+          <label>Dein Ort<input class="input" name="city" maxlength="60" value="${esc(ps.city || '')}" placeholder="z. B. München"></label>
+          <label>Land<select class="input" name="country">${[['DE', 'Deutschland'], ['AT', 'Österreich']].map(([c, l]) => `<option value="${c}" ${(ps.country || 'DE') === c ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+        </form>
+        <button class="btn primary block" data-done>Fertig</button>`, (el) => {
+        const keepPlace = () => {
+          const f = el.querySelector('[data-place]');
+          state.settings.prices = { city: f.city.value.trim(), country: f.country.value };
+        };
+        el.querySelectorAll('[data-preset]').forEach((b) => { b.onclick = () => { keepPlace(); addStore(b.dataset.preset); save(); draw(); }; });
+        el.querySelectorAll('[data-del]').forEach((b) => {
+          b.onclick = () => {
+            const s = storeById(b.dataset.del);
+            if (!confirm(`„${s.name}“ mit allen gemerkten Preisen entfernen?`)) return;
+            keepPlace();
+            state.stores = stores().filter((x) => x.id !== s.id);
+            state.prices = allPrices().filter((p) => p.storeId !== s.id);
+            if (ui.shopStoreId === s.id) setShopStore(null);
+            save();
+            draw();
+          };
+        });
+        const input = el.querySelector('[data-new-store]');
+        const add = () => { if (!input.value.trim()) return; keepPlace(); addStore(input.value); save(); draw(); };
+        el.querySelector('[data-add]').onclick = add;
+        input.onkeydown = (ev) => { if (ev.key === 'Enter') add(); };
+        el.querySelector('[data-done]').onclick = () => {
+          keepPlace();
+          save();
+          closeModal();
+          render();
+          if (after && stores().length) after();
+        };
+      });
+    };
+    draw();
+  }
+
+  /** Preise eines Artikels: eigene je Markt und – auf Wunsch – Open Prices. */
+  function pricesSection(it) {
+    if (!stores().length) {
+      return `<div class="price-section"><h3>💶 Preise</h3>
+        <p class="small muted">Lege deine Märkte an, dann merkt sich die App, was der Artikel wo kostet.</p>
+        <div class="btn-row"><button type="button" class="btn" data-price-stores>🏪 Märkte anlegen</button>
+        <button type="button" class="btn" data-open-prices>🌍 Open Prices</button></div></div>`;
+    }
+    const cmp = Pr.compareItem(allPrices(), Pr.priceKey(it), storeIds());
+    return `<div class="price-section"><h3>💶 Preise</h3>
+      ${cmp.length ? `<ul class="price-rank">${cmp.map((c, i) => `<li class="${i === 0 && cmp.length > 1 ? 'best' : ''}"><span>${esc(storeById(c.storeId).name)}
+          <small class="muted">· ${new Date(c.price.at).toLocaleDateString('de-DE', { day: 'numeric', month: 'short' })}${c.price.stale ? ' · alt' : ''}</small></span>
+          <span>${Pr.formatEuro(c.price.cents)}</span></li>`).join('')}</ul>` : '<p class="small muted">Noch kein Preis gemerkt.</p>'}
+      <div class="btn-row"><button type="button" class="btn" data-add-price>＋ Preis eintragen</button>
+        <button type="button" class="btn" data-open-prices>🌍 Open Prices</button></div></div>`;
+  }
+
+  /** Was haben andere für den Artikel bezahlt? (Open Prices) */
+  async function openPricesDialog(id) {
+    const it = shopItem(id);
+    if (!it || !OP) return;
+    const ps = state.settings.prices || {};
+    const head = `<h2>🌍 ${it.icon} ${esc(it.name)}</h2>
+      <p class="small muted">Preise, die andere in <a href="https://prices.openfoodfacts.org" target="_blank" rel="noopener">Open Prices</a> eingetragen haben${ps.city ? ` – aus ${esc(ps.city)} zuerst` : ''}.</p>`;
+    const foot = `<p class="tiny muted">Daten: Open Prices / Open Food Facts (ODbL)</p><button class="btn block" data-close-op>Schließen</button>`;
+    const bindClose = (el) => { el.querySelector('[data-close-op]').onclick = () => { closeModal(); }; };
+    openModal(`${head}<div class="empty"><p>Suche …</p></div>${foot}`, bindClose);
+    let results;
+    try {
+      if (!navigator.onLine) throw new Error('offline');
+      results = await OP.search({ name: it.name, key: it.key }, { country: ps.country || 'DE', city: ps.city });
+    } catch (e) {
+      openModal(`${head}<p class="note">Open Prices ist gerade nicht erreichbar. Bitte später nochmal versuchen.</p>${foot}`, bindClose);
+      return;
+    }
+    if (!document.querySelector('#modal-root .modal')) return; // inzwischen geschlossen
+    if (!results.length) {
+      openModal(`${head}<p class="note">Noch keine Preise für „${esc(it.name)}“ gefunden. Open Prices lebt vom Mitmachen – je mehr Leute Preise eintragen, desto besser wird es.</p>${foot}`, bindClose);
+      return;
+    }
+    const perLabel = (r) => (r.per === 'KILOGRAM' ? ' / kg' : '');
+    openModal(`${head}
+      <ul class="list op-list">${results.map((r, i) => `<li class="row">
+        <div class="row-main">
+          <div class="row-title">${esc(r.product || it.name)}${r.brand ? ` <small class="muted">${esc(r.brand)}</small>` : ''}</div>
+          <div class="row-sub">${esc(r.store || 'Unbekannter Markt')}${r.city ? `, ${esc(r.city)}` : ''}${r.quantity ? ` · ${esc(r.quantity)}` : ''}${r.date ? ` · ${new Date(r.date).toLocaleDateString('de-DE', { day: 'numeric', month: 'short', year: '2-digit' })}` : ''}
+            ${r.local ? '<span class="badge good">dein Ort</span>' : ''}${r.discounted ? '<span class="badge">Angebot</span>' : ''}</div>
+        </div>
+        <div class="op-price"><strong>${Pr.formatEuro(r.cents)}${perLabel(r)}</strong>
+          ${r.store && !r.per ? `<button class="link" data-take="${i}">übernehmen</button>` : ''}</div>
+      </li>`).join('')}</ul>${foot}`, (el) => {
+      bindClose(el);
+      el.querySelectorAll('[data-take]').forEach((b) => {
+        b.onclick = () => {
+          const r = results[Number(b.dataset.take)];
+          let s = matchStore(r.store);
+          if (!s) {
+            if (!confirm(`„${r.store}“ als neuen Markt anlegen und den Preis dort merken?`)) return;
+            s = addStore(r.store);
+          }
+          const at = r.date ? Date.parse(r.date) : Date.now();
+          savePrice(it, s.id, r.cents, { source: 'openprices', discounted: r.discounted, at: Number.isFinite(at) ? Math.min(at, Date.now()) : Date.now() });
+          save();
+          b.replaceWith(Object.assign(document.createElement('span'), { className: 'small good-text', textContent: `✓ bei ${s.name}` }));
+        };
+      });
+    });
   }
 
   // ---------------------------------------------------------------- Pflanzen
@@ -3723,6 +4005,8 @@
   function migrate() {
     if (!state.settings) state.settings = defaultState().settings;
     if (!Array.isArray(state.plants)) state.plants = [];
+    if (!Array.isArray(state.stores)) state.stores = [];
+    if (!Array.isArray(state.prices)) state.prices = [];
     if (!state.settings.perPersonBudget) {
       // Bisher gab es ein gemeinsames Budget für alle – jetzt hat jede Person ihr eigenes.
       // Aufteilen, damit der Plan insgesamt gleich viel Zeit vorsieht wie vorher.
@@ -3958,6 +4242,8 @@
       case 'add-plant': editPlant(null); break;
       case 'today-scope': ui.todayScope = el.dataset.scope; render(); break;
       case 'shop-done': shopDone(id); break;
+      case 'shop-store': setShopStore(ui.shopStoreId === id ? null : id); render(); break;
+      case 'shop-stores': storesDialog(); break;
       case 'shop-edit': ev.stopPropagation(); shopItemDialog(id); break;
       case 'shop-add-item': {
         const it = shopItem(id);

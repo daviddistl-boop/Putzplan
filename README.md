@@ -37,6 +37,9 @@ verteilt die Arbeit nach deinem Zeitbudget auf die Woche und sagt dir jeden Tag,
   eigenes Handy bleiben möglich. Haken zwei Personen dieselbe Aufgabe am selben Tag ab, zählt das erste Abhaken.
   Konto löschen direkt in der App. Einrichtung des Mail-Versands und der Google-Anmeldung:
   [`docs/einrichtung-konten.md`](docs/einrichtung-konten.md).
+- **Preise & Märkte** – beim Einkaufen den Preis eintragen (geteilt im Haushalt); die Liste zeigt, in welchem
+  Markt der Einkauf am günstigsten ist und was Aufteilen spart. Ergänzend Preise anderer aus
+  [Open Prices](https://prices.openfoodfacts.org) (Open Food Facts, ODbL).
 - **Automatischer Wochenplan** – Aufgaben werden nach Dringlichkeit auf die nächsten 7 Tage verteilt.
   Ist ein Tag voll, rutscht der Rest auf den nächsten Tag; bleibt Zeit übrig, werden bald fällige Aufgaben vorgezogen.
 - **Zeitbudget pro Wochentag** – z. B. 20 Min. unter der Woche, 1 Std. am Samstag, Sonntag frei.

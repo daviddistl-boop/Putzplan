@@ -103,3 +103,19 @@ test('Doppeltes Abhaken auf zwei Geräten: das erste zählt', () => {
   assert.deepStrictEqual(history.map((h) => h.id).sort(), ['b', 'c', 'd', 'e', 'f']);
   assert.deepStrictEqual(Sync.dedupeCompletions(history), []);
 });
+
+test('Märkte und Preise werden im Haushalt abgeglichen', () => {
+  const S = require('../sync.js');
+  const state = {
+    rooms: [], members: [], plants: [], tasks: [], history: [], shoppingLists: [], shoppingItems: [],
+    stores: [{ id: 's1', name: 'Aldi Süd' }, { id: 's2', name: 'Rewe' }],
+    prices: [{ id: 'p1', key: 'butter', name: 'Butter', storeId: 's1', cents: 179, at: 1 }],
+    settings: { prices: { city: 'München', country: 'DE' } },
+  };
+  const docs = S.stateToDocs(state);
+  assert.ok(docs.has('store:s1') && docs.has('price:p1'));
+  const back = S.docsToState(docs, { settings: {} });
+  assert.deepStrictEqual(back.stores.map((s) => s.name), ['Aldi Süd', 'Rewe']);
+  assert.strictEqual(back.prices[0].cents, 179);
+  assert.deepStrictEqual(back.settings.prices, { city: 'München', country: 'DE' });
+});

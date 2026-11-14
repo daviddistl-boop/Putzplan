@@ -446,3 +446,25 @@ details.tips ul { margin: 6px 0 0; padding-left: 20px; display: grid; gap: 4px; 
 }
 .feedback-fab:active { transform: scale(0.92); }
 .modal textarea.input { resize: vertical; min-height: 110px; font: inherit; }
+
+/* Preise */
+.tile-price { font-size: 0.68rem; line-height: 1.2; opacity: 0.95; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile-price.good { font-weight: 700; }
+.tile-price.cheaper { font-weight: 600; }
+.tile.recent .tile-price, .tile.catalog .tile-price { color: var(--muted); }
+.price-bar { margin: 4px 0 10px; }
+.price-bar .list-chips { align-items: center; }
+.price-panel { background: var(--surface); border-radius: var(--radius); padding: 12px 14px; margin-top: 8px; box-shadow: var(--shadow); }
+.price-panel p { margin: 6px 0 0; }
+.price-rank { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; }
+.price-rank li { display: flex; justify-content: space-between; gap: 8px; padding: 4px 8px; border-radius: 8px; }
+.price-rank li.best { background: color-mix(in srgb, var(--good) 14%, transparent); font-weight: 600; }
+.price-tip { margin: 6px 2px 0; }
+.price-section { border-top: 1px solid var(--line); padding-top: 8px; }
+.price-section h3 { margin: 4px 0; font-size: 0.95rem; }
+.price-input { font-size: 1.4rem; font-variant-numeric: tabular-nums; }
+.op-list { max-height: 55vh; overflow: auto; margin: 8px 0; }
+.op-list .row { box-shadow: none; background: var(--surface-2); }
+.op-price { text-align: right; display: grid; justify-items: end; gap: 2px; }
+.good-text { color: var(--good); }
+.tiny { font-size: 0.72rem; }
