@@ -234,3 +234,14 @@ test('Kompass: Name der Richtung und Licht-Stufe', () => {
   assert.deepStrictEqual([0, 40, 50, 100, 140, 180, 220, 260, 300, 320].map(P.lightForHeading),
     ['north', 'north', 'eastwest', 'eastwest', 'south', 'south', 'south', 'eastwest', 'eastwest', 'north']);
 });
+
+test('Erkennung: Gattung führt zur Stellvertreter-Art, nicht zur ersten passenden', () => {
+  const P = require('../plants.js');
+  // Bogenhanf heißt botanisch inzwischen auch „Dracaena“ – der Duftende Drachenbaum ist trotzdem ein Drachenbaum.
+  assert.strictEqual(P.matchSpecies('Dracaena fragrans').key, 'dracaena');
+  assert.strictEqual(P.matchSpecies('Dracaena reflexa', 'Dracaena').key, 'dracaena');
+  assert.strictEqual(P.matchSpecies('Dracaena trifasciata').key, 'sansevieria');
+  assert.strictEqual(P.matchSpecies('Sansevieria cylindrica', 'Sansevieria').key, 'sansevieria');
+  assert.strictEqual(P.matchSpecies('Ficus pumila').key, 'ficus-benjamina');
+  assert.strictEqual(P.matchSpecies('Ficus lyrata').key, 'ficus-lyrata');
+});

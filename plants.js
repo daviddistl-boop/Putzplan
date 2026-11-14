@@ -31,7 +31,7 @@
     // Grünpflanzen
     { key: 'monstera', name: 'Monstera', latin: 'Monstera deliciosa', water: 7, feed: 14, repot: 2 },
     { key: 'ficus-lyrata', name: 'Geigenfeige', latin: 'Ficus lyrata', water: 7, feed: 14, repot: 2 },
-    { key: 'ficus-benjamina', name: 'Birkenfeige (Ficus benjamina)', latin: 'Ficus benjamina', water: 6, feed: 14, repot: 2 },
+    { key: 'ficus-benjamina', name: 'Birkenfeige (Ficus benjamina)', latin: 'Ficus benjamina', alias: ['Ficus'], water: 6, feed: 14, repot: 2 },
     { key: 'ficus-elastica', name: 'Gummibaum', latin: 'Ficus elastica', water: 9, feed: 21, repot: 2 },
     { key: 'ficus-ginseng', name: 'Ficus Ginseng (Bonsai)', latin: 'Ficus microcarpa', water: 4, feed: 14, repot: 2 },
     { key: 'pothos', name: 'Efeutute', latin: 'Epipremnum aureum', water: 7, feed: 14, repot: 2 },
@@ -42,7 +42,7 @@
     { key: 'calathea', name: 'Korbmarante (Calathea)', latin: 'Goeppertia orbifolia', alias: ['Calathea'], water: 5, feed: 14, repot: 2 },
     { key: 'maranta', name: 'Pfeilwurz (Maranta)', latin: 'Maranta leuconeura', water: 5, feed: 14, repot: 2 },
     { key: 'chlorophytum', name: 'Grünlilie', latin: 'Chlorophytum comosum', water: 6, feed: 14, repot: 1 },
-    { key: 'dracaena', name: 'Drachenbaum', latin: 'Dracaena marginata', water: 9, feed: 21, repot: 2 },
+    { key: 'dracaena', name: 'Drachenbaum', latin: 'Dracaena marginata', alias: ['Dracaena', 'Dracaena fragrans', 'Dracaena deremensis', 'Dracaena reflexa', 'Dracaena surculosa'], water: 9, feed: 21, repot: 2 },
     { key: 'yucca', name: 'Yucca-Palme', latin: 'Yucca gigantea', alias: ['Yucca elephantipes'], water: 12, feed: 30, repot: 3 },
     { key: 'beaucarnea', name: 'Elefantenfuß', latin: 'Beaucarnea recurvata', water: 18, feed: 30, repot: 3, dry: true },
     { key: 'areca', name: 'Goldfruchtpalme', latin: 'Dypsis lutescens', water: 6, feed: 14, repot: 2 },
@@ -168,6 +168,10 @@
     const f = norm(family);
     const names = (s) => [s.latin].concat(s.alias || []).map(norm);
     return SPECIES.find((s) => names(s).includes(name))
+      // Unbekannte Art einer bekannten Gattung: zuerst die Stellvertreter-Art der Gattung
+      // (bloßer Gattungsname als Alias) – sonst landet z. B. jede Dracaena beim Bogenhanf,
+      // der botanisch inzwischen auch „Dracaena“ heißt.
+      || SPECIES.find((s) => names(s).includes(g))
       || SPECIES.find((s) => names(s).some((n) => n.split(' ')[0] === g))
       || (f ? SPECIES.find((s) => names(s).includes(f)) : null)
       || null;
