@@ -207,3 +207,30 @@ test('Planer: „Pflanzen im Putzplan mitzählen“ aus → nicht im Plan, nicht
   assert.strictEqual(S.roomCleanliness([t], JULY, st.settings), 100);
   assert.strictEqual(S.isPlannable(t, JULY, {}), true);
 });
+
+test('Kompass: Richtung aus dem Lage-Ereignis', () => {
+  const P = require('../plants.js');
+  assert.strictEqual(P.headingFromOrientation({ absolute: true, alpha: 90 }, 0), 270); // Android: alpha 90 = Westen
+  assert.strictEqual(P.headingFromOrientation({ absolute: true, alpha: 0 }, 0), 0);
+  assert.strictEqual(P.headingFromOrientation({ webkitCompassHeading: 180 }, 0), 180); // iPhone
+  assert.strictEqual(P.headingFromOrientation({ webkitCompassHeading: 350 }, 90), 80); // quer gehalten
+  assert.strictEqual(P.headingFromOrientation({ absolute: false, alpha: 90 }, 0), null); // ohne Nordbezug
+  assert.strictEqual(P.headingFromOrientation(null, 0), null);
+});
+
+test('Kompass: Glätten über 0°/360° hinweg', () => {
+  const P = require('../plants.js');
+  assert.strictEqual(P.smoothHeading(null, 10), 10);
+  assert.strictEqual(Math.round(P.smoothHeading(350, 10, 0.5)), 0);
+  assert.strictEqual(Math.round(P.smoothHeading(10, 350, 0.5)), 0);
+});
+
+test('Kompass: Name der Richtung und Licht-Stufe', () => {
+  const P = require('../plants.js');
+  assert.strictEqual(P.directionName(0), 'Norden');
+  assert.strictEqual(P.directionName(200), 'Süden');
+  assert.strictEqual(P.directionName(230, true), 'SW');
+  assert.strictEqual(P.directionName(359), 'Norden');
+  assert.deepStrictEqual([0, 40, 50, 100, 140, 180, 220, 260, 300, 320].map(P.lightForHeading),
+    ['north', 'north', 'eastwest', 'eastwest', 'south', 'south', 'south', 'eastwest', 'eastwest', 'north']);
+});

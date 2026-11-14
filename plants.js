@@ -394,7 +394,53 @@
     return Math.max(1, Math.round(waterInterval(plant, day) * 0.25));
   }
 
+  // ------------------------------------------------------------ Kompass
+  //
+  // Hilft bei der Frage „In welche Richtung zeigt das Fenster?“: Man hält das Handy flach,
+  // die Oberkante zeigt aus dem Fenster. Daraus wird die Licht-Stufe der Pflanze.
+
+  const DIRECTIONS = ['Norden', 'Nordosten', 'Osten', 'Südosten', 'Süden', 'Südwesten', 'Westen', 'Nordwesten'];
+  const DIRECTIONS_SHORT = ['N', 'NO', 'O', 'SO', 'S', 'SW', 'W', 'NW'];
+
+  const wrap = (deg) => ((deg % 360) + 360) % 360;
+
+  /**
+   * Himmelsrichtung, in die die Oberkante des Handys zeigt (0 = Norden, 90 = Osten), aus
+   * einem Lage-Ereignis des Browsers – oder null, wenn es keine Nordrichtung enthält.
+   * `screenAngle`: Drehung des Bildschirms (0 hochkant, 90 quer …).
+   */
+  function headingFromOrientation(e, screenAngle) {
+    if (!e) return null;
+    let h = null;
+    if (typeof e.webkitCompassHeading === 'number' && !Number.isNaN(e.webkitCompassHeading)) h = e.webkitCompassHeading; // iPhone
+    else if (e.absolute && typeof e.alpha === 'number') h = 360 - e.alpha; // Android: alpha zählt gegen den Uhrzeigersinn
+    if (h === null) return null;
+    return wrap(h + (screenAngle || 0));
+  }
+
+  /** Gleitender Mittelwert für Winkel (über 359° → 0° hinweg), damit die Nadel nicht zittert. */
+  function smoothHeading(prev, next, weight) {
+    if (prev === null || prev === undefined) return next;
+    const w = weight === undefined ? 0.25 : weight;
+    const diff = wrap(next - prev + 180) - 180;
+    return wrap(prev + diff * w);
+  }
+
+  function directionName(deg, short) {
+    const i = Math.round(wrap(deg) / 45) % 8;
+    return (short ? DIRECTIONS_SHORT : DIRECTIONS)[i];
+  }
+
+  /** Fensterrichtung → Licht-Stufe: Süden (SO bis SW) sonnig, Norden (NW bis NO) schattig, sonst Ost/West. */
+  function lightForHeading(deg) {
+    const h = wrap(deg);
+    if (h >= 135 && h < 225) return 'south';
+    if (h >= 315 || h < 45) return 'north';
+    return 'eastwest';
+  }
+
   const api = {
+    DIRECTIONS, headingFromOrientation, smoothHeading, directionName, lightForHeading,
     SPECIES, DEFAULT_SPECIES, POT_SIZES, POT_TYPES, LIGHTS,
     RAMP_UP_DAYS, TOP_WATER_EVERY, RAIN_SKIP_MM, HEAT_C, FROST_C,
     species, search, matchSpecies,

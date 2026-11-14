@@ -3164,6 +3164,7 @@
       id: p.id, name: p.name, nameTouched: true, species: p.species, speciesTouched: true, query: '',
       roomId: p.roomId || defaultPlantRoom(), location: p.location || 'indoor', light: p.light, size: p.size, pot: p.pot,
       fresh: P.inRampUp(p, today), customWater: p.customWater || '', photo: p.photo || null, paused: !!p.paused,
+      windowHeading: typeof p.windowHeading === 'number' ? p.windowHeading : null,
     } : {
       id: null, name: '', nameTouched: false, species: 'other', speciesTouched: false, query: '',
       roomId: defaultPlantRoom(), location: 'indoor', light: 'eastwest', size: 'm', pot: 'plastic',
@@ -3233,7 +3234,9 @@
     const lights = P.LIGHTS.filter((l) => !(outdoor && l.indoorOnly));
     const existing = d.id ? plant(d.id) : null;
     const learned = existing && existing.learn && Math.abs(existing.learn - 1) > 0.01 ? existing.learn : null;
-    const prevScroll = (document.querySelector('#modal-root .modal') || {}).scrollTop || 0;
+    // Nach dem Kompass an dieselbe Stelle zurück, sonst die Position des offenen Dialogs behalten.
+    const prevScroll = typeof d.returnScroll === 'number' ? d.returnScroll : (document.querySelector('#modal-root .modal') || {}).scrollTop || 0;
+    delete d.returnScroll;
     const chip = (attr, val, cur, label) => `<button type="button" class="chip ${val === cur ? 'on' : ''}" ${attr}="${val}">${label}</button>`;
 
     openModal(`
@@ -3255,8 +3258,9 @@
         <label>Name<input class="input" data-plant-name value="${esc(d.name)}" placeholder="${esc(sp.name)}"></label>
         <label>Standort<select class="input" data-plant-room>${roomOptions(d)}</select></label>
         <label class="check-label"><input type="checkbox" data-plant-outdoor ${outdoor ? 'checked' : ''}> Steht draußen (Regen, Hitze & Frost berücksichtigen)</label>
-        <div><span class="field-label">Licht</span>
-          <div class="chip-grid">${lights.map((l) => chip('data-plant-light', l.key, d.light, outdoor ? (l.outName || l.name) : l.name)).join('')}</div></div>
+        <div><span class="field-label">${outdoor ? 'Licht' : 'Licht – wohin zeigt das Fenster?'}</span>
+          <div class="chip-grid">${lights.map((l) => chip('data-plant-light', l.key, d.light, outdoor ? (l.outName || l.name) : l.name)).join('')}</div>
+          <button type="button" class="btn compass-btn" data-compass>🧭 ${d.windowHeading !== undefined && d.windowHeading !== null ? `Gemessen: ${P.directionName(d.windowHeading)} (${d.windowHeading}°) – neu messen` : 'Weiß nicht? Mit dem Kompass bestimmen'}</button></div>
         <div><span class="field-label">Topfgröße</span>
           <div class="chip-grid">${P.POT_SIZES.map((s) => chip('data-plant-size', s.key, d.size, s.name)).join('')}</div></div>
         <label>Topf<select class="input" data-plant-pot>${P.POT_TYPES.map((t) => `<option value="${t.key}" ${t.key === d.pot ? 'selected' : ''}>${t.name}</option>`).join('')}</select></label>
@@ -3331,7 +3335,8 @@
         if (d.location === 'outdoor' && d.light === 'room') d.light = 'eastwest';
         rerender();
       };
-      el.querySelectorAll('[data-plant-light]').forEach((b) => { b.onclick = () => { d.light = b.dataset.plantLight; rerender(); }; });
+      el.querySelectorAll('[data-plant-light]').forEach((b) => { b.onclick = () => { d.light = b.dataset.plantLight; d.windowHeading = null; rerender(); }; });
+      el.querySelector('[data-compass]').onclick = () => openCompass();
       el.querySelectorAll('[data-plant-size]').forEach((b) => { b.onclick = () => { d.size = b.dataset.plantSize; rerender(); }; });
       el.querySelectorAll('[data-plant-last]').forEach((b) => { b.onclick = () => { d.last = b.dataset.plantLast; rerender(); }; });
       el.querySelector('[data-plant-pot]').onchange = (ev) => { d.pot = ev.target.value; rerender(); };
@@ -3378,6 +3383,108 @@
     return roomId;
   }
 
+  // ---------------------------------------------------------------- Kompass für die Fensterrichtung
+  //
+  // Viele wissen nicht, wohin ihr Fenster zeigt. Der Kompass nutzt den Lagesensor des Handys:
+  // Handy flach halten, Oberkante zum Fenster – „Diese Richtung“ übernimmt die Licht-Stufe.
+
+  let compassStop = null;
+
+  function stopCompass() {
+    if (compassStop) compassStop();
+    compassStop = null;
+  }
+
+  /** Startet den Kompass. iPhone braucht vorher eine Erlaubnis – dafür muss das ein Tipp auslösen. */
+  async function openCompass() {
+    const d = plantDraft;
+    if (!d) return;
+    stopCompass();
+    d.returnScroll = (document.querySelector('#modal-root .modal') || {}).scrollTop || 0;
+    const DOE = window.DeviceOrientationEvent;
+    if (DOE && typeof DOE.requestPermission === 'function') {
+      try {
+        if ((await DOE.requestPermission()) !== 'granted') { toast('Ohne Erlaubnis für den Lagesensor geht der Kompass nicht.'); return; }
+      } catch (e) { /* ältere Geräte fragen nicht */ }
+    }
+    const outdoor = d.location === 'outdoor';
+    const lightName = (key) => {
+      const l = P.LIGHTS.find((x) => x.key === key);
+      return outdoor ? (l.outName || l.name) : l.name;
+    };
+    const ticks = Array.from({ length: 72 }, (_, i) => {
+      const major = i % 9 === 0;
+      return `<line x1="100" y1="${major ? 12 : 16}" x2="100" y2="22" transform="rotate(${i * 5} 100 100)" class="${major ? 'major' : ''}"/>`;
+    }).join('');
+    const letters = [['N', 0], ['O', 90], ['S', 180], ['W', 270]].map(([t, deg]) =>
+      `<text x="100" y="40" transform="rotate(${deg} 100 100)" class="${t === 'N' ? 'north' : ''}">${t}</text>`).join('');
+
+    openModal(`
+      <h2>🧭 Wohin zeigt das Fenster?</h2>
+      <p class="small muted">Stell dich mit dem Rücken zum Raum ans Fenster. Halte das Handy <strong>flach</strong> vor dich,
+        die <strong>Oberkante zeigt aus dem Fenster</strong>.</p>
+      <div class="compass">
+        <div class="compass-marker" aria-hidden="true">▲</div>
+        <svg viewBox="0 0 200 200" class="compass-rose" data-rose aria-hidden="true">
+          <circle cx="100" cy="100" r="92" class="ring"/>${ticks}${letters}
+          <polygon points="100,48 92,100 108,100" class="needle-n"/><polygon points="100,152 92,100 108,100" class="needle-s"/>
+          <circle cx="100" cy="100" r="5" class="hub"/>
+        </svg>
+      </div>
+      <p class="compass-readout" data-readout>Suche Norden …</p>
+      <p class="small muted center" data-light-out></p>
+      <p class="note" data-no-sensor hidden>Dein Handy liefert hier keinen Kompass. So geht es ohne:
+        Scheint <strong>mittags</strong> die Sonne herein, ist es ein Südfenster. Nur <strong>morgens</strong>: Osten,
+        nur <strong>abends</strong>: Westen, <strong>nie direkt</strong>: Norden.</p>
+      <p class="tiny muted center">Zeigt der Kompass Unsinn? Handy ein paarmal in Form einer 8 bewegen, dann neu versuchen.</p>
+      <div class="btn-row">
+        <button type="button" class="btn" data-compass-back>Zurück</button>
+        <button type="button" class="btn primary" data-compass-take disabled>✓ Diese Richtung</button>
+      </div>`, (el) => {
+      const rose = el.querySelector('[data-rose]');
+      const readout = el.querySelector('[data-readout]');
+      const lightOut = el.querySelector('[data-light-out]');
+      const take = el.querySelector('[data-compass-take]');
+      let heading = null;
+      let frame = 0;
+      const draw = () => {
+        frame = 0;
+        if (heading === null) return;
+        rose.style.transform = `rotate(${-heading}deg)`;
+        readout.innerHTML = `<strong>${P.directionName(heading)}</strong> <span class="muted">${Math.round(heading)}°</span>`;
+        lightOut.textContent = `→ ${lightName(P.lightForHeading(heading))}`;
+        take.disabled = false;
+      };
+      const onOrientation = (e) => {
+        if (!el.isConnected) { stopCompass(); return; } // Dialog wurde anders geschlossen
+        const angle = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
+        const h = P.headingFromOrientation(e, angle);
+        if (h === null) return;
+        heading = P.smoothHeading(heading, h);
+        if (!frame) frame = requestAnimationFrame(draw);
+      };
+      // Android meldet die Nordrichtung über „deviceorientationabsolute“, das iPhone über „deviceorientation“.
+      window.addEventListener('deviceorientationabsolute', onOrientation);
+      window.addEventListener('deviceorientation', onOrientation);
+      const noSensor = setTimeout(() => { if (heading === null) { el.querySelector('[data-no-sensor]').hidden = false; readout.textContent = 'Kein Kompass verfügbar'; } }, 3000);
+      compassStop = () => {
+        window.removeEventListener('deviceorientationabsolute', onOrientation);
+        window.removeEventListener('deviceorientation', onOrientation);
+        clearTimeout(noSensor);
+        if (frame) cancelAnimationFrame(frame);
+      };
+      el.querySelector('[data-compass-back]').onclick = () => { stopCompass(); renderPlantDialog(); };
+      take.onclick = () => {
+        if (heading === null) return;
+        stopCompass();
+        d.light = P.lightForHeading(heading);
+        d.windowHeading = Math.round(heading);
+        renderPlantDialog();
+        toast(`🧭 ${P.directionName(heading)} → ${lightName(d.light)}`);
+      };
+    });
+  }
+
   function savePlant() {
     const d = plantDraft;
     const today = S.today();
@@ -3390,6 +3497,7 @@
       roomId: roomForPlant(d.roomId),
       location: d.location,
       light: d.light,
+      windowHeading: typeof d.windowHeading === 'number' ? d.windowHeading : null,
       size: d.size,
       pot: d.pot,
       photo: d.photo || null,
