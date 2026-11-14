@@ -3359,12 +3359,16 @@
     });
   }
 
+  // Name für eine Pflanze aus dem Steckbrief – ohne den Zusatz der allgemeinen Pflegegruppen.
+  const plainSpeciesName = (sp) => sp.name.replace(/\s*\(allgemein\)$/, '');
+
   function pickSpecies(key, suggestedName) {
     const d = plantDraft;
     d.species = key;
     d.speciesTouched = true;
     const sp = P.species(key);
-    if (!d.nameTouched) d.name = key === 'other' && suggestedName ? suggestedName : sp.name;
+    // Bei „Andere Pflanze“ und allgemeinen Gruppen ist der erkannte Name genauer als der Steckbrief.
+    if (!d.nameTouched) d.name = (key === 'other' || sp.group) && suggestedName ? suggestedName : plainSpeciesName(sp);
     if (sp.out && !d.id && d.location === 'indoor' && !OUTDOOR_RE.test((room(d.roomId) || {}).name || '')) {
       // Typische Balkonpflanze – Standort nur vorschlagen, nicht erzwingen.
       toast(`${sp.name} steht meist draußen – Standort prüfen 🌿`);
@@ -3492,7 +3496,7 @@
     const p = d.id ? plant(d.id) : { id: uid(), createdOn: today, learn: 1 };
     const tmp = draftAsPlant(d);
     Object.assign(p, {
-      name: d.name.trim() || sp.name,
+      name: d.name.trim() || plainSpeciesName(sp),
       species: d.species,
       roomId: roomForPlant(d.roomId),
       location: d.location,

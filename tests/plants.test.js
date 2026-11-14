@@ -245,3 +245,32 @@ test('Erkennung: Gattung führt zur Stellvertreter-Art, nicht zur ersten passend
   assert.strictEqual(P.matchSpecies('Ficus pumila').key, 'ficus-benjamina');
   assert.strictEqual(P.matchSpecies('Ficus lyrata').key, 'ficus-lyrata');
 });
+
+test('Pflegegruppen: unbekannte Arten bekommen sinnvolle Werte über Gattung oder Familie', () => {
+  const P = require('../plants.js');
+  const m = (n, g, f) => (P.matchSpecies(n, g, f) || {}).key;
+  assert.strictEqual(m('Graptoveria debbie', 'Graptoveria', 'Crassulaceae'), 'g-succulent');
+  assert.strictEqual(m('Rhaphidophora tetrasperma', 'Rhaphidophora', 'Araceae'), 'g-aroid');
+  assert.strictEqual(m('Cyrtomium falcatum', 'Cyrtomium', 'Dryopteridaceae'), 'g-fern');
+  assert.strictEqual(m('Livistona chinensis', 'Livistona', 'Arecaceae'), 'g-palm');
+  assert.strictEqual(m('Dendrobium nobile', 'Dendrobium', 'Orchidaceae'), 'phalaenopsis');
+  assert.strictEqual(m('Ctenanthe burle-marxii', 'Ctenanthe', 'Marantaceae'), 'calathea');
+  assert.strictEqual(m('Tulipa gesneriana', 'Tulipa', 'Liliaceae'), 'g-bulb');
+  assert.strictEqual(m('Unbekannta rara', 'Unbekannta', 'Fantasiaceae'), undefined);
+  // Eine bekannte Art geht immer vor der Gruppe.
+  assert.strictEqual(m('Zamioculcas zamiifolia', 'Zamioculcas', 'Araceae'), 'zamioculcas');
+});
+
+test('Pflegegruppen sind vollständige Steckbriefe und auffindbar', () => {
+  const P = require('../plants.js');
+  const keys = new Set(P.SPECIES.map((s) => s.key).concat(P.GROUPS.map((g) => g.key)));
+  for (const v of Object.values(P.GENUS_MAP).concat(Object.values(P.FAMILY_MAP))) assert.ok(keys.has(v), `unbekannter Verweis ${v}`);
+  for (const g of P.GROUPS) {
+    assert.strictEqual(P.species(g.key), g);
+    assert.ok(g.water > 0 && g.feed >= 0 && g.repot >= 0);
+  }
+  assert.strictEqual(new Set(P.SPECIES.map((s) => s.key)).size, P.SPECIES.length);
+  const found = P.search('farn').map((s) => s.key);
+  assert.ok(found.includes('g-fern'));
+  assert.ok(found.indexOf('nephrolepis') < found.indexOf('g-fern'), 'einzelne Arten vor Gruppen');
+});

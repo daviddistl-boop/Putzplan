@@ -66,6 +66,20 @@
     { key: 'syngonium', name: 'Purpurtute (Syngonium)', latin: 'Syngonium podophyllum', water: 6, feed: 14, repot: 1 },
     { key: 'fittonia', name: 'Mosaikpflanze', latin: 'Fittonia albivenis', water: 3, feed: 21, repot: 1 },
     { key: 'oxalis', name: 'Glücksklee (Oxalis)', latin: 'Oxalis triangularis', water: 5, feed: 21, repot: 1 },
+    { key: 'scindapsus', name: 'Silberne Efeutute (Scindapsus)', latin: 'Scindapsus pictus', alias: ['Scindapsus'], water: 8, feed: 21, repot: 2 },
+    { key: 'aspidistra', name: 'Schusterpalme', latin: 'Aspidistra elatior', alias: ['Aspidistra'], water: 10, feed: 30, repot: 3 },
+    { key: 'pachira', name: 'Glückskastanie (Pachira)', latin: 'Pachira aquatica', alias: ['Pachira', 'Pachira glabra'], water: 10, feed: 21, repot: 2 },
+    { key: 'ceropegia', name: 'Leuchterblume (Herzchenranke)', latin: 'Ceropegia woodii', alias: ['Ceropegia'], water: 12, feed: 30, repot: 2, dry: true },
+    { key: 'curio', name: 'Erbsenpflanze (Curio)', latin: 'Curio rowleyanus', alias: ['Senecio rowleyanus', 'Curio', 'Senecio'], water: 12, feed: 30, repot: 2, dry: true },
+    { key: 'soleirolia', name: 'Bubikopf', latin: 'Soleirolia soleirolii', alias: ['Soleirolia'], water: 3, feed: 21, repot: 1 },
+    { key: 'cissus', name: 'Königswein (Cissus)', latin: 'Cissus rhombifolia', alias: ['Cissus'], water: 6, feed: 21, repot: 2 },
+    { key: 'radermachera', name: 'Zimmeresche', latin: 'Radermachera sinica', alias: ['Radermachera'], water: 5, feed: 14, repot: 2 },
+    { key: 'polyscias', name: 'Fiederaralie (Polyscias)', latin: 'Polyscias fruticosa', alias: ['Polyscias'], water: 6, feed: 21, repot: 2 },
+    { key: 'fatsia', name: 'Zimmeraralie', latin: 'Fatsia japonica', alias: ['Fatsia'], water: 6, feed: 21, repot: 2 },
+    { key: 'coffea', name: 'Kaffeepflanze', latin: 'Coffea arabica', alias: ['Coffea'], water: 5, feed: 14, repot: 2 },
+    { key: 'musa', name: 'Bananenpflanze', latin: 'Musa acuminata', alias: ['Musa', 'Musa basjoo'], water: 4, feed: 7, repot: 1 },
+    { key: 'tillandsia', name: 'Luftpflanze (Tillandsia)', latin: 'Tillandsia ionantha', alias: ['Tillandsia'], water: 7, feed: 30, repot: 0 },
+    { key: 'zantedeschia', name: 'Calla', latin: 'Zantedeschia aethiopica', alias: ['Zantedeschia'], water: 4, feed: 14, repot: 1 },
     // Blühende Zimmerpflanzen
     { key: 'phalaenopsis', name: 'Orchidee (Phalaenopsis)', latin: 'Phalaenopsis amabilis', alias: ['Phalaenopsis'], water: 8, feed: 21, repot: 2, dry: true },
     { key: 'begonia', name: 'Begonie', latin: 'Begonia elatior', alias: ['Begonia'], water: 5, feed: 14, repot: 1 },
@@ -73,12 +87,29 @@
     { key: 'kalanchoe', name: 'Kalanchoe', latin: 'Kalanchoe blossfeldiana', water: 12, feed: 30, repot: 2, dry: true },
     { key: 'schlumbergera', name: 'Weihnachtskaktus', latin: 'Schlumbergera truncata', water: 7, feed: 21, repot: 2 },
     { key: 'guzmania', name: 'Bromelie (Guzmania)', latin: 'Guzmania lingulata', water: 7, feed: 30, repot: 0 },
+    { key: 'cyclamen', name: 'Alpenveilchen', latin: 'Cyclamen persicum', alias: ['Cyclamen'], water: 5, feed: 14, repot: 1 },
+    { key: 'poinsettia', name: 'Weihnachtsstern', latin: 'Euphorbia pulcherrima', water: 6, feed: 14, repot: 1 },
+    { key: 'clivia', name: 'Klivie (Riemenblatt)', latin: 'Clivia miniata', alias: ['Clivia'], water: 8, feed: 21, repot: 3 },
+    { key: 'gardenia', name: 'Gardenie', latin: 'Gardenia jasminoides', alias: ['Gardenia'], water: 4, feed: 14, repot: 2 },
+    { key: 'jasmine', name: 'Jasmin', latin: 'Jasminum polyanthum', alias: ['Jasminum'], water: 4, feed: 14, repot: 2 },
+    { key: 'azalea', name: 'Azalee / Rhododendron', latin: 'Rhododendron simsii', alias: ['Rhododendron'], water: 3, feed: 21, repot: 2 },
+    { key: 'amaryllis', name: 'Amaryllis (Ritterstern)', latin: 'Hippeastrum', alias: ['Hippeastrum'], water: 7, feed: 14, repot: 2 },
+    { key: 'primula', name: 'Primel', latin: 'Primula vulgaris', alias: ['Primula'], water: 3, feed: 14, repot: 0 },
+    { key: 'chrysanthemum', name: 'Chrysantheme', latin: 'Chrysanthemum morifolium', alias: ['Chrysanthemum'], water: 3, feed: 14, repot: 0 },
     { key: 'saintpaulia', name: 'Usambaraveilchen', latin: 'Streptocarpus ionanthus', alias: ['Saintpaulia ionantha', 'Saintpaulia'], water: 5, feed: 14, repot: 1 },
     // Kakteen & Sukkulenten
     { key: 'aloe', name: 'Aloe vera', latin: 'Aloe vera', water: 18, feed: 30, repot: 2, dry: true },
     { key: 'echeveria', name: 'Echeverie', latin: 'Echeveria elegans', alias: ['Echeveria'], water: 14, feed: 30, repot: 2, dry: true },
     { key: 'crassula', name: 'Geldbaum (Crassula)', latin: 'Crassula ovata', water: 16, feed: 30, repot: 3, dry: true },
     { key: 'haworthia', name: 'Haworthie', latin: 'Haworthiopsis attenuata', alias: ['Haworthia'], water: 16, feed: 30, repot: 2, dry: true },
+    { key: 'euphorbia-milii', name: 'Christusdorn', latin: 'Euphorbia milii', alias: ['Euphorbia'], water: 14, feed: 30, repot: 2, dry: true },
+    { key: 'sedum', name: 'Fetthenne (Sedum)', latin: 'Sedum morganianum', alias: ['Sedum'], water: 14, feed: 30, repot: 2, dry: true },
+    { key: 'sempervivum', name: 'Hauswurz', latin: 'Sempervivum tectorum', alias: ['Sempervivum'], water: 21, feed: 0, repot: 3, dry: true, out: true },
+    { key: 'lithops', name: 'Lebende Steine', latin: 'Lithops', alias: ['Lithops'], water: 28, feed: 0, repot: 3, dry: true },
+    { key: 'agave', name: 'Agave', latin: 'Agave americana', alias: ['Agave'], water: 21, feed: 30, repot: 3, dry: true },
+    { key: 'gasteria', name: 'Gasterie', latin: 'Gasteria carinata', alias: ['Gasteria'], water: 16, feed: 30, repot: 2, dry: true },
+    { key: 'adenium', name: 'Wüstenrose', latin: 'Adenium obesum', alias: ['Adenium'], water: 10, feed: 21, repot: 2, dry: true },
+    { key: 'portulacaria', name: 'Speckbaum', latin: 'Portulacaria afra', alias: ['Portulacaria'], water: 14, feed: 30, repot: 2, dry: true },
     { key: 'cactus', name: 'Kaktus', latin: 'Mammillaria', alias: ['Cactaceae', 'Opuntia', 'Echinocactus', 'Cereus', 'Gymnocalycium'], water: 21, feed: 30, repot: 3, dry: true },
     // Kräuter
     { key: 'basil', name: 'Basilikum', latin: 'Ocimum basilicum', water: 2, feed: 14, repot: 0 },
@@ -86,6 +117,11 @@
     { key: 'parsley', name: 'Petersilie', latin: 'Petroselinum crispum', water: 3, feed: 21, repot: 0 },
     { key: 'chives', name: 'Schnittlauch', latin: 'Allium schoenoprasum', water: 3, feed: 21, repot: 1 },
     { key: 'rosemary', name: 'Rosmarin', latin: 'Salvia rosmarinus', alias: ['Rosmarinus officinalis'], water: 7, feed: 30, repot: 2, dry: true, out: true },
+    { key: 'sage', name: 'Salbei', latin: 'Salvia officinalis', alias: ['Salvia'], water: 6, feed: 30, repot: 2, out: true },
+    { key: 'oregano', name: 'Oregano', latin: 'Origanum vulgare', alias: ['Origanum'], water: 5, feed: 30, repot: 1, out: true },
+    { key: 'lemon-balm', name: 'Zitronenmelisse', latin: 'Melissa officinalis', alias: ['Melissa'], water: 3, feed: 21, repot: 1, out: true },
+    { key: 'dill', name: 'Dill', latin: 'Anethum graveolens', water: 2, feed: 21, repot: 0, out: true },
+    { key: 'coriander', name: 'Koriander', latin: 'Coriandrum sativum', water: 2, feed: 21, repot: 0 },
     { key: 'thyme', name: 'Thymian', latin: 'Thymus vulgaris', water: 7, feed: 30, repot: 2, dry: true, out: true },
     // Balkon & Garten
     { key: 'tomato', name: 'Tomate', latin: 'Solanum lycopersicum', water: 1, feed: 7, repot: 0, out: true },
@@ -99,8 +135,67 @@
     { key: 'olive', name: 'Olivenbaum', latin: 'Olea europaea', water: 7, feed: 21, repot: 3, out: true },
     { key: 'citrus', name: 'Zitrusbaum', latin: 'Citrus limon', alias: ['Citrus'], water: 4, feed: 14, repot: 2, out: true },
     { key: 'oleander', name: 'Oleander', latin: 'Nerium oleander', water: 3, feed: 14, repot: 2, out: true },
+    { key: 'chili', name: 'Chili / Paprika', latin: 'Capsicum annuum', alias: ['Capsicum'], water: 2, feed: 7, repot: 0, out: true },
+    { key: 'cucumber', name: 'Gurke', latin: 'Cucumis sativus', water: 1, feed: 7, repot: 0, out: true },
+    { key: 'calibrachoa', name: 'Zauberglöckchen', latin: 'Calibrachoa', alias: ['Calibrachoa'], water: 2, feed: 7, repot: 0, out: true },
+    { key: 'fuchsia', name: 'Fuchsie', latin: 'Fuchsia', alias: ['Fuchsia'], water: 2, feed: 7, repot: 1, out: true },
+    { key: 'dahlia', name: 'Dahlie', latin: 'Dahlia', alias: ['Dahlia'], water: 3, feed: 14, repot: 0, out: true },
+    { key: 'marguerite', name: 'Strauchmargerite', latin: 'Argyranthemum frutescens', alias: ['Argyranthemum'], water: 2, feed: 7, repot: 1, out: true },
+    { key: 'heather', name: 'Heide', latin: 'Calluna vulgaris', alias: ['Calluna', 'Erica'], water: 3, feed: 30, repot: 2, out: true },
+    { key: 'bamboo', name: 'Bambus', latin: 'Fargesia murielae', alias: ['Fargesia', 'Phyllostachys'], water: 2, feed: 21, repot: 2, out: true },
+    { key: 'clematis', name: 'Waldrebe (Clematis)', latin: 'Clematis', alias: ['Clematis'], water: 3, feed: 14, repot: 3, out: true },
     { key: 'bougainvillea', name: 'Bougainvillea', latin: 'Bougainvillea glabra', alias: ['Bougainvillea'], water: 4, feed: 14, repot: 2, out: true },
   ];
+
+  // Pflegegruppen: Für Pflanzen, deren Art nicht einzeln in der Liste steht, aber deren
+  // Gattung oder Familie die Foto-Erkennung kennt. Werte wie bei den Steckbriefen.
+  const GROUPS = [
+    { key: 'g-succulent', name: 'Sukkulente (allgemein)', latin: 'Dickblattgewächse & Co.', water: 14, feed: 30, repot: 2, dry: true, group: true },
+    { key: 'g-aroid', name: 'Aronstabgewächs (allgemein)', latin: 'Araceae', water: 7, feed: 14, repot: 2, group: true },
+    { key: 'g-fern', name: 'Farn (allgemein)', latin: 'Farne', water: 4, feed: 30, repot: 1, group: true },
+    { key: 'g-palm', name: 'Palme (allgemein)', latin: 'Arecaceae', water: 8, feed: 21, repot: 3, group: true },
+    { key: 'g-herb', name: 'Küchenkraut (allgemein)', latin: 'Lamiaceae', water: 3, feed: 21, repot: 1, out: true, group: true },
+    { key: 'g-foliage', name: 'Grünpflanze (allgemein)', latin: '', water: 7, feed: 21, repot: 2, group: true },
+    { key: 'g-balcony', name: 'Balkonblume (allgemein)', latin: '', water: 2, feed: 7, repot: 0, out: true, group: true },
+    { key: 'g-shrub', name: 'Strauch & Kübelpflanze (allgemein)', latin: '', water: 4, feed: 21, repot: 3, out: true, group: true },
+    { key: 'g-grass', name: 'Gras & Bambus (allgemein)', latin: 'Poaceae', water: 3, feed: 30, repot: 2, out: true, group: true },
+    { key: 'g-bulb', name: 'Zwiebelblume (allgemein)', latin: '', water: 5, feed: 21, repot: 1, group: true },
+  ];
+
+  // Gattung → Steckbrief oder Gruppe (nur Gattungen, die nicht schon über einen Steckbrief laufen).
+  const GENUS_MAP = {
+    crassula: 'crassula', graptopetalum: 'g-succulent', pachyphytum: 'g-succulent', aeonium: 'g-succulent',
+    kleinia: 'g-succulent', stapelia: 'g-succulent', huernia: 'g-succulent', faucaria: 'g-succulent', delosperma: 'g-succulent',
+    rhaphidophora: 'g-aroid', caladium: 'g-aroid', colocasia: 'g-aroid', homalomena: 'g-aroid', thaumatophyllum: 'philodendron',
+    ctenanthe: 'calathea', stromanthe: 'calathea', goeppertia: 'calathea',
+    dendrobium: 'phalaenopsis', oncidium: 'phalaenopsis', cattleya: 'phalaenopsis', cymbidium: 'phalaenopsis', vanda: 'phalaenopsis',
+    vriesea: 'guzmania', aechmea: 'guzmania', neoregelia: 'guzmania', ananas: 'guzmania',
+    mandevilla: 'g-balcony', lantana: 'g-balcony', verbena: 'g-balcony', impatiens: 'g-balcony', tagetes: 'g-balcony',
+    hosta: 'g-shrub', laurus: 'g-shrub', myrtus: 'g-shrub', camellia: 'g-shrub', hebe: 'g-shrub', acer: 'g-shrub',
+  };
+
+  // Familie → Steckbrief oder Gruppe.
+  const FAMILY_MAP = {
+    cactaceae: 'cactus', crassulaceae: 'g-succulent', aizoaceae: 'g-succulent', asphodelaceae: 'g-succulent',
+    portulacaceae: 'g-succulent', didiereaceae: 'g-succulent',
+    araceae: 'g-aroid', marantaceae: 'calathea', orchidaceae: 'phalaenopsis', bromeliaceae: 'guzmania', arecaceae: 'g-palm',
+    polypodiaceae: 'g-fern', pteridaceae: 'g-fern', aspleniaceae: 'g-fern', nephrolepidaceae: 'g-fern', davalliaceae: 'g-fern',
+    dryopteridaceae: 'g-fern', blechnaceae: 'g-fern', athyriaceae: 'g-fern', lomariopsidaceae: 'g-fern', osmundaceae: 'g-fern',
+    thelypteridaceae: 'g-fern', selaginellaceae: 'g-fern',
+    lamiaceae: 'g-herb', apiaceae: 'g-herb',
+    moraceae: 'g-foliage', araliaceae: 'g-foliage', urticaceae: 'g-foliage', piperaceae: 'peperomia', commelinaceae: 'tradescantia',
+    gesneriaceae: 'saintpaulia', acanthaceae: 'g-foliage', begoniaceae: 'begonia', euphorbiaceae: 'g-foliage', asparagaceae: 'g-foliage',
+    rubiaceae: 'g-foliage', strelitziaceae: 'strelitzia', musaceae: 'musa', zingiberaceae: 'g-foliage', apocynaceae: 'g-foliage',
+    vitaceae: 'g-foliage', bignoniaceae: 'g-foliage', malvaceae: 'g-foliage', oxalidaceae: 'oxalis', primulaceae: 'primula',
+    solanaceae: 'g-balcony', geraniaceae: 'pelargonium', asteraceae: 'g-balcony', verbenaceae: 'g-balcony', campanulaceae: 'g-balcony',
+    plantaginaceae: 'g-balcony', scrophulariaceae: 'g-balcony', onagraceae: 'fuchsia', balsaminaceae: 'g-balcony', violaceae: 'g-balcony',
+    tropaeolaceae: 'g-balcony', cucurbitaceae: 'cucumber',
+    rosaceae: 'g-shrub', ericaceae: 'heather', oleaceae: 'g-shrub', hydrangeaceae: 'hydrangea', buxaceae: 'buxus', cupressaceae: 'g-shrub',
+    pinaceae: 'g-shrub', taxaceae: 'g-shrub', berberidaceae: 'g-shrub', caprifoliaceae: 'g-shrub', myrtaceae: 'g-shrub', lauraceae: 'g-shrub',
+    rutaceae: 'citrus', fabaceae: 'g-shrub', nyctaginaceae: 'bougainvillea', theaceae: 'g-shrub', sapindaceae: 'g-shrub',
+    poaceae: 'g-grass', cyperaceae: 'g-grass',
+    amaryllidaceae: 'g-bulb', liliaceae: 'g-bulb', iridaceae: 'g-bulb',
+  };
 
   /** Standard-Profil, wenn die Art unbekannt ist. Das Intervall lässt sich von Hand einstellen. */
   const DEFAULT_SPECIES = { key: 'other', name: 'Andere Pflanze', latin: '', water: 7, feed: 30, repot: 2 };
@@ -143,7 +238,7 @@
   const findBy = (list, key, fallback) => list.find((x) => x.key === key) || fallback;
 
   function species(key) {
-    return findBy(SPECIES, key, DEFAULT_SPECIES);
+    return SPECIES.find((x) => x.key === key) || GROUPS.find((x) => x.key === key) || DEFAULT_SPECIES;
   }
 
   function norm(s) {
@@ -153,14 +248,17 @@
   /** Suche in den Steckbriefen nach deutschem oder botanischem Namen. */
   function search(query) {
     const q = norm(query);
-    if (!q) return SPECIES.slice().sort((a, b) => a.name.localeCompare(b.name, 'de'));
-    return SPECIES.filter((s) => [s.name, s.latin].concat(s.alias || []).some((n) => norm(n).includes(q)))
-      .sort((a, b) => a.name.localeCompare(b.name, 'de'));
+    const byName = (a, b) => a.name.localeCompare(b.name, 'de');
+    // Einzelne Arten zuerst, die allgemeinen Pflegegruppen danach.
+    if (!q) return SPECIES.slice().sort(byName).concat(GROUPS.slice().sort(byName));
+    const hit = (s) => [s.name, s.latin].concat(s.alias || []).some((n) => norm(n).includes(q));
+    return SPECIES.filter(hit).sort(byName).concat(GROUPS.filter(hit).sort(byName));
   }
 
   /**
    * Passender Steckbrief zu einem botanischen Namen (z. B. aus der Foto-Erkennung):
-   * erst die Art, dann die Gattung, dann die Familie. null = nicht gefunden.
+   * erst die Art, dann die Gattung, dann die Familie – zuletzt über die Pflegegruppen.
+   * null = nicht gefunden.
    */
   function matchSpecies(scientificName, genus, family) {
     const name = norm(scientificName).split(' ').slice(0, 2).join(' ');
@@ -173,7 +271,9 @@
       // der botanisch inzwischen auch „Dracaena“ heißt.
       || SPECIES.find((s) => names(s).includes(g))
       || SPECIES.find((s) => names(s).some((n) => n.split(' ')[0] === g))
+      || (GENUS_MAP[g] ? species(GENUS_MAP[g]) : null)
       || (f ? SPECIES.find((s) => names(s).includes(f)) : null)
+      || (f && FAMILY_MAP[f] ? species(FAMILY_MAP[f]) : null)
       || null;
   }
 
@@ -447,7 +547,7 @@
     DIRECTIONS, headingFromOrientation, smoothHeading, directionName, lightForHeading,
     SPECIES, DEFAULT_SPECIES, POT_SIZES, POT_TYPES, LIGHTS,
     RAMP_UP_DAYS, TOP_WATER_EVERY, RAIN_SKIP_MM, HEAT_C, FROST_C,
-    species, search, matchSpecies,
+    GROUPS, GENUS_MAP, FAMILY_MAP, species, search, matchSpecies,
     seasonFactor, isOutdoorWinter, isGrowingSeason, nextMonthStart,
     inRampUp, waterMode, topWaterDue, isOutdoor,
     waterInterval, waterLabel, careTasks, applyFeedback, recheckDays,
