@@ -1,5 +1,7 @@
 /*
- * Putzplan – Anbindung an Open Prices (Open Food Facts), nur lesend und ohne Konto.
+ * Putzplan – Anbindung an Open Prices (Open Food Facts).
+ * Lesen geht ohne Konto. Eigene Preise teilen nur auf ausdrücklichen Wunsch, mit einem
+ * eigenen Open-Food-Facts-Konto und einem Foto vom Preisschild als Beleg.
  *
  * Open Prices ist eine offene, gemeinschaftlich gepflegte Preisdatenbank
  * (https://prices.openfoodfacts.org, Daten unter ODbL). Preise gehören dort zu einem
@@ -115,7 +117,116 @@
     return rank(raw.map(normalizePrice).filter(Boolean), opts);
   }
 
-  const api = { BASE, CATEGORY_TAGS, normalizePrice, rank, search };
+  // ------------------------------------------------------------ Produkt per Barcode
+
+  /** Nur Ziffern; gültige EAN-8/12/13/14-Länge, sonst null. */
+  function cleanCode(code) {
+    const c = String(code == null ? '' : code).replace(/\D/g, '');
+    return [8, 12, 13, 14].includes(c.length) ? c : null;
+  }
+
+  /**
+   * Produkt zu einem Barcode: { code, name, brand, quantity, image } oder null (unbekannt).
+   * `name` ist schon „Marke Produkt“, z. B. „Wasa Fibres“.
+   */
+  async function product(code, fetchFn) {
+    const c = cleanCode(code);
+    if (!c) return null;
+    const f = fetchFn || root.fetch.bind(root);
+    const res = await f(`${BASE}/products/code/${c}`, { headers: { Accept: 'application/json' } });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`Open Prices antwortet mit ${res.status}`);
+    const p = await res.json();
+    const brand = String(p.brands || '').split(',')[0].trim();
+    const prettyBrand = brand && brand === brand.toLowerCase() ? brand.charAt(0).toUpperCase() + brand.slice(1) : brand;
+    const pname = String(p.product_name || '').trim();
+    const name = pname && prettyBrand && !pname.toLowerCase().includes(prettyBrand.toLowerCase()) ? `${prettyBrand} ${pname}` : (pname || prettyBrand);
+    const q = num(p.product_quantity);
+    const quantity = Number.isFinite(q) && q > 0 ? `${q} ${p.product_quantity_unit || 'g'}` : (p.quantity || null);
+    return { code: c, name: name.slice(0, 40), brand: prettyBrand || null, quantity, image: p.image_url || null };
+  }
+
+  // ------------------------------------------------------------ Preise teilen (mit Konto)
+
+  const OSM_TYPES = { N: 'NODE', W: 'WAY', R: 'RELATION', NODE: 'NODE', WAY: 'WAY', RELATION: 'RELATION' };
+  const osmType = (t) => OSM_TYPES[String(t || '').toUpperCase()] || null;
+
+  async function call(f, path, init) {
+    const res = await f(`${BASE}${path}`, init);
+    let body = null;
+    try { body = await res.json(); } catch (e) { /* kein JSON */ }
+    if (!res.ok) {
+      const err = new Error((body && (body.detail || body.message)) ? String(body.detail || body.message) : `Open Prices antwortet mit ${res.status}`);
+      err.status = res.status;
+      throw err;
+    }
+    return body;
+  }
+
+  /**
+   * Anmelden mit Open-Food-Facts-Benutzername (nicht E-Mail) und Passwort → { user, token }.
+   * Das Passwort wird nur hierfür gesendet und nicht gespeichert.
+   */
+  async function login(username, password, fetchFn) {
+    const f = fetchFn || root.fetch.bind(root);
+    const body = await call(f, '/auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+      body: qs({ username: String(username || '').trim(), password: String(password || '') }),
+    });
+    if (!body || !body.access_token) throw new Error('Anmeldung fehlgeschlagen');
+    return { user: body.user_id || String(username).trim(), token: body.access_token };
+  }
+
+  /** Datum „2026-11-17“ in Ortszeit. */
+  function isoDate(t) {
+    const d = new Date(t || Date.now());
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+
+  /**
+   * Preis teilen: erst das Foto als Beleg (Preisschild) hochladen, dann den Preis.
+   * `data` = { token, code, cents, discounted, osmId, osmType, at, photo (Blob), fileName }.
+   * Gibt { proofId, priceId } zurück.
+   */
+  async function sharePrice(data, fetchFn) {
+    const f = fetchFn || root.fetch.bind(root);
+    const code = cleanCode(data.code);
+    const type = osmType(data.osmType);
+    if (!data.token) throw new Error('Nicht bei Open Prices angemeldet');
+    if (!code) throw new Error('Kein gültiger Barcode');
+    if (!data.osmId || !type) throw new Error('Markt ohne OpenStreetMap-Filiale');
+    if (!data.photo) throw new Error('Foto vom Preisschild fehlt');
+    const auth = { Authorization: `Bearer ${data.token}`, Accept: 'application/json' };
+    const date = isoDate(data.at);
+    const form = new root.FormData();
+    form.append('file', data.photo, data.fileName || 'preisschild.jpg');
+    form.append('type', 'PRICE_TAG');
+    form.append('location_osm_id', String(data.osmId));
+    form.append('location_osm_type', type);
+    form.append('currency', 'EUR');
+    form.append('date', date);
+    const proof = await call(f, '/proofs/upload', { method: 'POST', headers: auth, body: form });
+    if (!proof || proof.id == null) throw new Error('Beleg wurde nicht angenommen');
+    const price = await call(f, '/prices', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, auth),
+      body: JSON.stringify({
+        type: 'PRODUCT',
+        product_code: code,
+        price: Math.round(data.cents) / 100,
+        price_is_discounted: !!data.discounted,
+        currency: 'EUR',
+        date,
+        location_osm_id: Number(data.osmId),
+        location_osm_type: type,
+        proof_id: proof.id,
+      }),
+    });
+    return { proofId: proof.id, priceId: price && price.id != null ? price.id : null };
+  }
+
+  const api = { BASE, CATEGORY_TAGS, normalizePrice, rank, search, cleanCode, product, login, sharePrice, isoDate, osmType };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.OpenPrices = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

@@ -236,8 +236,66 @@
     });
   }
 
+  // ------------------------------------------------------------ Barcode & Foto
+
+  /**
+   * Barcode scannen (EAN/UPC) mit dem Google-Scanner – braucht keine Kamera-Erlaubnis.
+   * Gibt die Ziffern zurück, null bei Abbruch. Fehler `code`: 'unsupported' (z. B. im Browser), 'install', 'failed'.
+   */
+  async function scanBarcode() {
+    if (!(isNative && P.BarcodeScanner)) throw locationError('unsupported', 'Scanner gibt es nur in der App');
+    const B = P.BarcodeScanner;
+    const avail = await B.isGoogleBarcodeScannerModuleAvailable().catch(() => ({ available: true }));
+    if (!avail.available) {
+      // Der Scanner kommt beim ersten Mal über die Google-Play-Dienste nach (einmalig, klein).
+      await new Promise((resolve, reject) => {
+        let handle = null;
+        const done = (fn) => { if (handle) handle.remove(); clearTimeout(timer); fn(); };
+        const timer = setTimeout(() => done(() => reject(locationError('install'))), 120000);
+        B.addListener('googleBarcodeScannerModuleInstallProgress', (e) => {
+          if (e.state === 4) done(resolve);
+          else if (e.state === 3 || e.state === 5) done(() => reject(locationError('install')));
+        }).then((h) => { handle = h; });
+        B.installGoogleBarcodeScannerModule().catch(() => done(() => reject(locationError('install'))));
+      });
+    }
+    try {
+      const r = await B.scan({ formats: ['EAN_13', 'EAN_8', 'UPC_A', 'UPC_E'] });
+      const b = ((r && r.barcodes) || [])[0];
+      return b ? String(b.rawValue || b.displayValue || '') : null;
+    } catch (e) {
+      if (/cancel/i.test(String((e && e.message) || ''))) return null;
+      throw locationError('failed', e && e.message);
+    }
+  }
+
+  /** Foto aufnehmen (z. B. vom Preisschild) → Blob (JPEG), null bei Abbruch. */
+  async function takePhoto() {
+    if (isNative && P.Camera) {
+      try {
+        const r = await P.Camera.takePhoto({ quality: 70, targetWidth: 1600, targetHeight: 1600, correctOrientation: true });
+        const res = await fetch(r.webPath);
+        return await res.blob();
+      } catch (e) {
+        if (/cancel/i.test(String((e && (e.message || e.code)) || ''))) return null;
+        throw locationError('failed', e && e.message);
+      }
+    }
+    // Browser: Datei-Auswahl mit Kamera.
+    return new Promise((resolve) => {
+      const input = root.document.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/*';
+      input.setAttribute('capture', 'environment');
+      input.onchange = () => resolve((input.files && input.files[0]) || null);
+      input.click();
+    });
+  }
+
   root.PutzplanNative = {
     currentPosition,
+    scanBarcode,
+    takePhoto,
     isNative,
     saveBackup,
     loadBackup,

@@ -2520,6 +2520,16 @@
         on('[data-open-prices]', () => openPricesDialog(id));
         on('[data-price-stores]', () => storesDialog(() => shopItemDialog(id)));
         on('[data-new-variant]', () => newVariantDialog(id));
+        on('[data-scan-variant]', async () => {
+          const r = await scanVariant(Pr.priceKey(it));
+          if (!r) return;
+          if (r.unknown) { toast('Produkt unbekannt – bitte Sorte und Größe eintragen.'); newVariantDialog(id, r.code); return; }
+          it.variantId = r.variant.id;
+          save();
+          toast(`📷 ${variantLabel(r.variant)}`);
+          zone.innerHTML = pricesSection(it);
+          bindZone();
+        });
         on('[data-edit-variant]', () => variantDialog(it.variantId, () => shopItemDialog(id)));
         zone.querySelectorAll('[data-pick-variant]').forEach((b) => {
           b.onclick = () => {
@@ -2810,8 +2820,22 @@
     const lastWithVariant = allPrices().filter((p) => p.key === key && p.variantId && variantById(p.variantId)).sort((a, b) => b.at - a.at)[0];
     let variantId = (itemVariant(it) || {}).id || (lastWithVariant && lastWithVariant.variantId) || null;
     let newVariant = false;
+    let scannedCode = null;
     let typed = '';
     let discounted = false;
+    let share = lsGet(OP_SHARE_KEY) === '1';
+    // Teilen mit Open Prices: braucht Barcode der Sorte, eine Filiale aus der Kartensuche und ein Konto.
+    const shareBlock = () => {
+      const v = !newVariant && variantById(variantId);
+      const st = storeById(storeId);
+      let why = '';
+      if (!v || !v.code) why = 'Mit gescanntem Barcode kannst du den Preis auch mit Open Prices teilen.';
+      else if (!st || !st.osmId) why = 'Teilen geht nur mit einer Filiale aus der Suche (mit Adresse).';
+      if (why) return `<p class="tiny muted">🌍 ${why}</p>`;
+      const a = opAuth();
+      return `<label class="check-label"><input type="checkbox" name="share" ${share && a ? 'checked' : ''}> 🌍 Auch mit Open Prices teilen</label>
+        <p class="tiny muted">${a ? `Als ${esc(a.user)} · danach ein Foto vom Preisschild machen.` : '<button type="button" class="link" data-op-login>Open-Food-Facts-Konto verbinden</button>'}</p>`;
+    };
     const last = () => {
       const ch = Pr.chains(stores());
       return Pr.storePrice(Pr.pricesByChain(allPrices(), ch).filter((p) => (p.variantId || null) === variantId), key, ch.of[storeId]);
@@ -2825,6 +2849,7 @@
         <button class="chip ${!variantId && !newVariant ? 'on' : ''}" data-variant="">ohne Angabe</button>
         ${variantsOf(key).map((v) => `<button class="chip ${v.id === variantId && !newVariant ? 'on' : ''}" data-variant="${v.id}">${esc(variantLabel(v))}</button>`).join('')}
         <button class="chip ${newVariant ? 'on' : ''}" data-variant-new>＋ neue Sorte</button>
+        <button class="chip" data-variant-scan>📷 Scannen</button>
       </div>
       <form class="form">
         ${newVariant ? `<div class="variant-new">
@@ -2833,6 +2858,7 @@
         <label>Preis in €<input class="input price-input" name="price" inputmode="decimal" autocomplete="off" placeholder="z. B. 1,79" value="${esc(typed || (last() ? Pr.formatEuro(last().cents).replace(' €', '') : ''))}"></label>
         <p class="small muted" data-unit></p>
         <label class="check-label"><input type="checkbox" name="discounted" ${discounted ? 'checked' : ''}> War im Angebot</label>
+        ${shareBlock()}
         <p class="small bad-text" data-err hidden></p>
         <div class="btn-row">
           <button type="button" class="btn" data-cancel>Abbrechen</button>
@@ -2840,7 +2866,19 @@
         </div>
       </form>`, (el) => {
       const form = el.querySelector('form');
-      const keep = () => { typed = form.price.value; discounted = form.discounted.checked; };
+      const keep = () => { typed = form.price.value; discounted = form.discounted.checked; if (form.share) share = form.share.checked; };
+      const opLogin = el.querySelector('[data-op-login]');
+      if (opLogin) opLogin.onclick = () => { keep(); openPricesAccountDialog(() => { share = !!opAuth(); draw(); }); };
+      el.querySelector('[data-variant-scan]').onclick = async () => {
+        keep();
+        const r = await scanVariant(key);
+        if (!r) return;
+        if (r.variant) { variantId = r.variant.id; newVariant = false; typed = typed || ''; draw(); toast(`📷 ${variantLabel(r.variant)}`); return; }
+        newVariant = true;
+        scannedCode = r.code;
+        draw();
+        toast('Produkt unbekannt – bitte Sorte und Größe eintragen.');
+      };
       el.querySelectorAll('[data-store]').forEach((b) => { b.onclick = () => { keep(); typed = ''; storeId = b.dataset.store; draw(); }; });
       el.querySelectorAll('[data-variant]').forEach((b) => { b.onclick = () => { keep(); typed = ''; variantId = b.dataset.variant || null; newVariant = false; draw(); }; });
       el.querySelector('[data-variant-new]').onclick = () => { keep(); newVariant = true; draw(); };
@@ -2867,31 +2905,156 @@
           const qty = Pr.parseQty(form.vqty.value);
           if (!name && !qty) { err.textContent = 'Bitte Sorte oder Packungsgröße angeben – oder „ohne Angabe“ wählen.'; err.hidden = false; return; }
           if (form.vqty.value.trim() && !qty) { err.textContent = 'Packungsgröße bitte wie „275 g“, „1,5 l“ oder „6 Stk“.'; err.hidden = false; return; }
-          vid = addVariant(key, name, qty).id;
+          vid = addVariant(key, name, qty, scannedCode).id;
         }
+        const wantShare = !!(form.share && form.share.checked);
+        if (form.share) lsSet(OP_SHARE_KEY, wantShare ? '1' : '');
+        if (wantShare && !opAuth()) { err.textContent = 'Bitte zuerst das Open-Food-Facts-Konto verbinden – oder ohne Teilen speichern.'; err.hidden = false; return; }
         savePrice(it, storeId, cents, { discounted: form.discounted.checked, variantId: vid });
+        const entry = allPrices()[allPrices().length - 1];
         save();
         closeModal();
         render();
         const v = vid && variantById(vid);
         toast(`💶 ${it.name}${v ? ` (${variantLabel(v)})` : ''}: ${Pr.formatEuro(cents)} bei ${chainName(storeId)} gemerkt`);
+        if (wantShare && v && v.code) sharePriceWithOpenPrices(entry, storeById(storeId), v);
       };
     });
     draw();
   }
 
-  /** Neue Sorte anlegen – gibt es eine gleiche schon, wird die genommen. */
-  function addVariant(key, name, qty) {
+  /** Neue Sorte anlegen – gibt es eine gleiche schon (gleicher Barcode bzw. Name und Größe), wird die genommen. */
+  function addVariant(key, name, qty, code) {
     const n = String(name || '').trim().slice(0, 40);
-    const same = variantsOf(key).find((v) => Pr.norm(v.name) === Pr.norm(n) && Pr.formatQty(v.qty) === Pr.formatQty(qty));
-    if (same) return same;
-    const v = { id: uid(), key, name: n, qty: qty || null };
+    const c = code ? OP.cleanCode(code) : null;
+    const same = (c && variantsOf(key).find((v) => v.code === c))
+      || variantsOf(key).find((v) => Pr.norm(v.name) === Pr.norm(n) && Pr.formatQty(v.qty) === Pr.formatQty(qty) && (!c || !v.code));
+    if (same) {
+      if (c && !same.code) same.code = c;
+      return same;
+    }
+    const v = { id: uid(), key, name: n, qty: qty || null, code: c || null };
     variants().push(v);
     return v;
   }
 
+  // ---------------------------------------------------------------- Barcode & Open Prices teilen
+
+  const OP_AUTH_KEY = 'putzplan.openPricesAuth'; // nur auf diesem Gerät, wird nicht geteilt
+  const OP_SHARE_KEY = 'putzplan.openPricesShare';
+  function opAuth() {
+    try { return JSON.parse(lsGet(OP_AUTH_KEY) || 'null'); } catch (e) { return null; }
+  }
+  const setOpAuth = (a) => lsSet(OP_AUTH_KEY, a ? JSON.stringify(a) : '');
+
+  /**
+   * Barcode scannen und als Sorte des Artikels `key` zurückgeben (vorhanden oder neu aus Open Prices).
+   * Gibt { variant } zurück, { code, unknown: true } bei unbekanntem Produkt, oder null bei Abbruch.
+   */
+  async function scanVariant(key) {
+    let code;
+    try {
+      code = await window.PutzplanNative.scanBarcode();
+    } catch (e) {
+      if (e && e.code === 'unsupported') {
+        const typed = prompt('Barcode eingeben (die Ziffern unter dem Strichcode):');
+        code = typed && OP.cleanCode(typed);
+        if (typed && !code) { toast('Das ist kein gültiger Barcode (8 oder 13 Ziffern).'); return null; }
+      } else {
+        toast(e && e.code === 'install' ? 'Der Scanner wird noch von Google Play geladen – bitte gleich nochmal versuchen.' : 'Scannen hat nicht geklappt.');
+        return null;
+      }
+    }
+    code = code && OP.cleanCode(code);
+    if (!code) return null;
+    const known = variantsOf(key).find((v) => v.code === code);
+    if (known) return { variant: known };
+    let prod = null;
+    try { prod = await OP.product(code); } catch (e) { /* offline: Sorte von Hand anlegen */ }
+    if (!prod || !prod.name) return { code, unknown: true };
+    const v = addVariant(key, prod.name, Pr.parseQty(prod.quantity), code);
+    save();
+    return { variant: v, product: prod };
+  }
+
+  /** Open-Food-Facts-Konto verbinden oder trennen. */
+  function openPricesAccountDialog(after) {
+    const back = () => (after ? after() : closeModal());
+    const a = opAuth();
+    if (a) {
+      openModal(`
+        <h2>🌍 Open Prices</h2>
+        <p>Verbunden als <strong>${esc(a.user)}</strong>.</p>
+        <p class="small muted">Geteilte Preise sind öffentlich (unter der freien Lizenz ODbL) und mit deinem Benutzernamen verknüpft. Löschen kannst du sie auf prices.openfoodfacts.org.</p>
+        <div class="btn-row"><button class="btn danger" data-logout>Trennen</button><button class="btn primary" data-back>Fertig</button></div>`, (el) => {
+        el.querySelector('[data-back]').onclick = back;
+        el.querySelector('[data-logout]').onclick = () => { setOpAuth(null); toast('Open Prices getrennt'); back(); };
+      });
+      return;
+    }
+    openModal(`
+      <h2>🌍 Mit Open Prices teilen</h2>
+      <p class="small">Open Prices ist eine freie Preisdatenbank von Open Food Facts. Wenn du Preise teilst, helfen sie allen – auch dir, wenn andere Preise aus deiner Gegend eintragen.</p>
+      <ul class="small">
+        <li>Dafür brauchst du ein kostenloses <a href="https://world.openfoodfacts.org" target="_blank" rel="noopener">Open-Food-Facts-Konto</a> (dort „Anmelden“ → „Konto erstellen“).</li>
+        <li>Zu jedem Preis gehört ein Foto vom Preisschild als Beleg.</li>
+        <li>Geteilte Preise sind öffentlich und mit deinem Benutzernamen verknüpft. Es wird nur geteilt, wenn du beim Preis „teilen“ ankreuzt.</li>
+        <li>Dein Passwort wird nicht gespeichert – nur eine Anmeldung auf diesem Gerät.</li>
+      </ul>
+      <form class="form">
+        <label>Benutzername (nicht die E-Mail)<input class="input" name="user" autocomplete="username" autocapitalize="none" required></label>
+        <label>Passwort<input class="input" name="pw" type="password" autocomplete="current-password" required></label>
+        <p class="small bad-text" data-err hidden></p>
+        <div class="btn-row"><button type="button" class="btn" data-back>Abbrechen</button><button type="submit" class="btn primary">Verbinden</button></div>
+      </form>`, (el) => {
+      el.querySelector('[data-back]').onclick = back;
+      el.querySelector('form').onsubmit = async (ev) => {
+        ev.preventDefault();
+        const f = ev.target;
+        const err = el.querySelector('[data-err]');
+        const btn = f.querySelector('[type=submit]');
+        btn.disabled = true;
+        err.hidden = true;
+        try {
+          setOpAuth(await OP.login(f.user.value, f.pw.value));
+          lsSet(OP_SHARE_KEY, '1');
+          toast('🌍 Mit Open Prices verbunden');
+          back();
+        } catch (e) {
+          btn.disabled = false;
+          err.textContent = e && e.status === 401 || /credential|password|invalid/i.test(String(e && e.message))
+            ? 'Benutzername oder Passwort stimmt nicht.' : 'Open Prices ist gerade nicht erreichbar.';
+          err.hidden = false;
+        }
+      };
+    });
+  }
+
+  /** Nach dem Speichern: Foto vom Preisschild aufnehmen und den Preis mit Open Prices teilen. */
+  async function sharePriceWithOpenPrices(entry, store, variant) {
+    const auth = opAuth();
+    if (!auth) return;
+    let photo;
+    try { photo = await window.PutzplanNative.takePhoto(); } catch (e) { photo = null; }
+    if (!photo) { toast('Nicht geteilt – ohne Foto vom Preisschild geht es nicht.'); return; }
+    toast('🌍 Wird mit Open Prices geteilt …');
+    try {
+      const r = await OP.sharePrice({ token: auth.token, code: variant.code, cents: entry.cents, discounted: entry.discounted, osmId: store.osmId, osmType: store.osmType, at: entry.at, photo });
+      const p = allPrices().find((x) => x.id === entry.id);
+      if (p) { p.shared = r.priceId || true; save(); }
+      toast('🌍 Danke! Der Preis ist jetzt bei Open Prices.');
+    } catch (e) {
+      if (e && (e.status === 401 || e.status === 403)) {
+        setOpAuth(null);
+        toast('Open-Prices-Anmeldung ist abgelaufen – bitte neu verbinden. Der Preis ist bei dir gespeichert.');
+      } else {
+        toast(`Teilen hat nicht geklappt${e && e.message ? ` (${e.message})` : ''}. Der Preis ist bei dir gespeichert.`);
+      }
+    }
+  }
+
   /** Neue Sorte für einen Einkaufsartikel – wird gleich ausgewählt. */
-  function newVariantDialog(id) {
+  function newVariantDialog(id, code) {
     const it = shopItem(id);
     if (!it) return;
     openModal(`
@@ -2899,6 +3062,7 @@
       <form class="form">
         <label>Sorte / Marke<input class="input" name="vname" maxlength="40" placeholder="z. B. Wasa Roggen"></label>
         <label>Packungsgröße<input class="input" name="vqty" maxlength="20" placeholder="z. B. 275 g, 1,5 l, 6 x 0,5 l"></label>
+        <label>Barcode (optional)<input class="input" name="vcode" inputmode="numeric" maxlength="14" value="${esc(code || '')}" placeholder="Ziffern unter dem Strichcode"></label>
         <p class="small muted">Mit Packungsgröße vergleicht die App auch verschieden große Packungen fair (Preis pro kg/l).</p>
         <p class="small bad-text" data-err hidden></p>
         <div class="btn-row">
@@ -2915,7 +3079,9 @@
         const qty = Pr.parseQty(f.vqty.value);
         if (!f.vname.value.trim() && !qty) { err.textContent = 'Bitte Sorte oder Packungsgröße angeben.'; err.hidden = false; return; }
         if (f.vqty.value.trim() && !qty) { err.textContent = 'Packungsgröße bitte wie „275 g“, „1,5 l“ oder „6 Stk“.'; err.hidden = false; return; }
-        it.variantId = addVariant(Pr.priceKey(it), f.vname.value, qty).id;
+        const vcode = f.vcode.value.trim();
+        if (vcode && !OP.cleanCode(vcode)) { err.textContent = 'Barcode bitte mit 8 oder 13 Ziffern.'; err.hidden = false; return; }
+        it.variantId = addVariant(Pr.priceKey(it), f.vname.value, qty, vcode).id;
         save();
         shopItemDialog(id);
       };
@@ -2931,7 +3097,8 @@
       <form class="form">
         <label>Sorte / Marke<input class="input" name="vname" maxlength="40" value="${esc(v.name)}" placeholder="z. B. Wasa Roggen"></label>
         <label>Packungsgröße<input class="input" name="vqty" maxlength="20" value="${esc(Pr.formatQty(v.qty))}" placeholder="z. B. 275 g"></label>
-        <p class="small bad-text" data-err hidden>Packungsgröße bitte wie „275 g“, „1,5 l“ oder „6 Stk“.</p>
+        <label>Barcode (optional)<input class="input" name="vcode" inputmode="numeric" maxlength="14" value="${esc(v.code || '')}" placeholder="Ziffern unter dem Strichcode"></label>
+        <p class="small bad-text" data-err hidden>Packungsgröße bitte wie „275 g“, „1,5 l“ oder „6 Stk“, Barcode mit 8 oder 13 Ziffern.</p>
         <div class="btn-row">
           <button type="button" class="btn danger" data-del>Löschen</button>
           <button type="button" class="btn" data-cancel>Abbrechen</button>
@@ -2951,9 +3118,11 @@
         ev.preventDefault();
         const f = ev.target;
         const qty = Pr.parseQty(f.vqty.value);
-        if (f.vqty.value.trim() && !qty) { el.querySelector('[data-err]').hidden = false; return; }
+        const vcode = f.vcode.value.trim();
+        if ((f.vqty.value.trim() && !qty) || (vcode && !OP.cleanCode(vcode))) { el.querySelector('[data-err]').hidden = false; return; }
         v.name = f.vname.value.trim().slice(0, 40);
         v.qty = qty || null;
+        v.code = vcode ? OP.cleanCode(vcode) : null;
         save();
         if (after) after(); else closeModal();
       };
@@ -2983,8 +3152,10 @@
       <div class="inline-form quick-other"><input class="input" type="search" data-store-q maxlength="40" autocomplete="off" placeholder="Markt suchen, z. B. Billa"></div>
       <div data-store-results></div>
       <div class="chip-grid" data-presets></div>
+      <p class="small">🌍 Open Prices: ${opAuth() ? `verbunden als ${esc(opAuth().user)}` : 'nicht verbunden'} · <button class="link" data-op-account>${opAuth() ? 'ändern' : 'Konto verbinden'}</button></p>
       <p class="tiny muted">Orte & Märkte: © OpenStreetMap-Mitwirkende (Suche über Photon). Preise anderer: Open Prices.</p>
       <button class="btn primary block" data-done>Fertig</button>`, (el) => {
+      el.querySelector('[data-op-account]').onclick = () => openPricesAccountDialog(() => storesDialog(after));
       const placeBox = el.querySelector('[data-place-box]');
       const list = el.querySelector('[data-store-list]');
       const results = el.querySelector('[data-store-results]');
@@ -3215,6 +3386,7 @@
         <button type="button" class="chip ${chosen ? '' : 'on'}" data-pick-variant="">Egal welche</button>
         ${variantsOf(key).map((v) => `<button type="button" class="chip ${chosen && chosen.id === v.id ? 'on' : ''}" data-pick-variant="${v.id}">${esc(variantLabel(v))}</button>`).join('')}
         <button type="button" class="chip" data-new-variant>＋ Sorte</button>
+        <button type="button" class="chip" data-scan-variant>📷 Scannen</button>
       </div>
       ${chosen ? `<button type="button" class="link small" data-edit-variant="${chosen.id}">✎ „${esc(variantLabel(chosen))}“ bearbeiten</button>`
         : '<p class="small muted">Bei „egal welche“ vergleicht die App den Preis pro kg/l – gib dafür bei den Sorten die Packungsgröße an.</p>'}
@@ -3298,7 +3470,7 @@
           // Produkt mit Packungsgröße → als Sorte merken („Wasa Roggen · 275 g“).
           const qty = Pr.parseQty(r.quantity);
           const vname = r.product && r.brand && !Pr.norm(r.product).includes(Pr.norm(String(r.brand).split(',')[0])) ? `${String(r.brand).split(',')[0]} ${r.product}` : (r.product || '');
-          const variantId = qty || vname ? addVariant(Pr.priceKey(it), vname, qty).id : null;
+          const variantId = qty || vname || r.code ? addVariant(Pr.priceKey(it), vname, qty, r.code).id : null;
           savePrice(it, s.id, r.cents, { source: 'openprices', discounted: r.discounted, variantId, at: Number.isFinite(at) ? Math.min(at, Date.now()) : Date.now() });
           save();
           b.replaceWith(Object.assign(document.createElement('span'), { className: 'small good-text', textContent: `✓ bei ${s.name}` }));
