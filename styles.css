@@ -462,6 +462,10 @@ details.tips ul { margin: 6px 0 0; padding-left: 20px; display: grid; gap: 4px; 
 .price-tip { margin: 6px 2px 0; }
 .price-section { border-top: 1px solid var(--line); padding-top: 8px; }
 .price-section h3 { margin: 4px 0; font-size: 0.95rem; }
+.variant-zone { border-top: 1px solid var(--line); padding-top: 8px; margin-bottom: 8px; }
+.variant-zone h3 { margin: 4px 0; font-size: 0.95rem; }
+.variant-zone .link { padding: 4px 0; }
+.variant-new { display: grid; gap: 8px; }
 .price-input { font-size: 1.4rem; font-variant-numeric: tabular-nums; }
 .op-list { max-height: 55vh; overflow: auto; margin: 8px 0; }
 .op-list .row { box-shadow: none; background: var(--surface-2); }

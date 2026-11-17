@@ -30,6 +30,7 @@
       shoppingItems: [],
       stores: [],
       prices: [],
+      variants: [],
       history: [],
       settings: { minutesPerWeekday: [20, 20, 20, 20, 20, 60, 0], perPersonBudget: true },
     };
@@ -2407,14 +2408,14 @@
     toast(`${it.icon} ${it.name} gekauft`, stores().length ? [{ label: '💶 Preis', run: () => priceDialog(it.id) }, undo] : undo);
   }
 
-  function shopTile(it, mode) {
+  function shopTile(it, mode, view) {
     const m = it.addedBy && member(it.addedBy);
     const action = mode === 'open' ? 'shop-done' : 'shop-add-item';
     return `<div class="tile ${mode}" role="button" tabindex="0" data-action="${action}" data-id="${it.id}">
       <span class="tile-icon">${it.icon}</span>
       <span class="tile-name">${esc(it.name)}</span>
-      ${it.spec ? `<span class="tile-spec">${esc(it.spec)}</span>` : ''}
-      ${mode === 'open' ? priceHint(it) : ''}
+      ${it.spec || itemVariant(it) ? `<span class="tile-spec">${esc([variantLabel(itemVariant(it)), it.spec].filter(Boolean).join(' · '))}</span>` : ''}
+      ${mode === 'open' ? priceHint(it, view) : ''}
       ${mode === 'open' && m && state.members.length > 1 ? `<span class="tile-who" style="background:${m.color}" title="Hinzugefügt von ${esc(m.name)}">${esc(m.name.charAt(0).toUpperCase())}</span>` : ''}
       ${mode === 'open' ? `<button class="tile-edit" data-action="shop-edit" data-id="${it.id}" title="Bearbeiten">✎</button>` : ''}
     </div>`;
@@ -2449,6 +2450,7 @@
     const byCat = Sh.CATEGORIES.map((c) => ({ c, items: open.filter((i) => (i.cat || 'other') === c.key).sort((a, b) => a.name.localeCompare(b.name, 'de')) }))
       .filter((g) => g.items.length);
     const openCats = ui.shopOpenCats || (ui.shopOpenCats = new Set());
+    const pv = stores().length ? priceView() : null; // einmal für alle Kacheln
 
     return `
       <header class="page-head"><h1>Einkauf</h1>
@@ -2465,7 +2467,7 @@
       <div class="shop-add"><input class="input" type="search" data-shop-q placeholder="🔍 Was brauchst du?" value="${esc(ui.shopQuery || '')}" enterkeyhint="done"></div>
       <div data-shop-suggest>${shopSuggestions(ui.shopQuery)}</div>
       ${byCat.length ? byCat.map((g) => `<section class="shop-cat"><h3>${g.c.icon} ${g.c.name}</h3>
-          <div class="tile-grid">${g.items.map((i) => shopTile(i, 'open')).join('')}</div></section>`).join('')
+          <div class="tile-grid">${g.items.map((i) => shopTile(i, 'open', pv)).join('')}</div></section>`).join('')
         : '<div class="empty"><div class="emoji">🛒</div><p>Alles da! Tippe oben, was du brauchst, oder wähle unten aus dem Katalog.</p></div>'}
       ${recent.length ? `<section class="shop-cat"><h3>🕑 Zuletzt gekauft</h3>
         <div class="tile-grid">${recent.map((i) => shopTile(i, 'recent')).join('')}</div></section>` : ''}
@@ -2499,7 +2501,7 @@
         <label>Kategorie<select class="input" name="cat">${Sh.CATEGORIES.map((c) => `<option value="${c.key}" ${c.key === (it.cat || 'other') ? 'selected' : ''}>${c.icon} ${c.name}</option>`).join('')}</select></label>
         ${lists.length > 1 ? `<label>Liste<select class="input" name="listId">${lists.map((l) => `<option value="${l.id}" ${l.id === it.listId ? 'selected' : ''}>${l.icon} ${esc(l.name)}</option>`).join('')}</select></label>` : ''}
         ${it.addedBy && member(it.addedBy) ? `<p class="small muted">Hinzugefügt von ${esc(member(it.addedBy).name)}</p>` : ''}
-        ${pricesSection(it)}
+        <div data-price-zone>${pricesSection(it)}</div>
         <div class="btn-row">
           <button type="button" class="btn danger" data-del>Entfernen</button>
           <button type="button" class="btn" data-cancel>Abbrechen</button>
@@ -2511,10 +2513,24 @@
         state.shoppingItems = state.shoppingItems.filter((x) => x.id !== id);
         save(); closeModal(); render();
       };
-      const on = (sel, fn) => { const b = el.querySelector(sel); if (b) b.onclick = fn; };
-      on('[data-add-price]', () => priceDialog(id));
-      on('[data-open-prices]', () => openPricesDialog(id));
-      on('[data-price-stores]', () => storesDialog(() => shopItemDialog(id)));
+      const zone = el.querySelector('[data-price-zone]');
+      const bindZone = () => {
+        const on = (sel, fn) => { const b = zone.querySelector(sel); if (b) b.onclick = fn; };
+        on('[data-add-price]', () => priceDialog(id));
+        on('[data-open-prices]', () => openPricesDialog(id));
+        on('[data-price-stores]', () => storesDialog(() => shopItemDialog(id)));
+        on('[data-new-variant]', () => newVariantDialog(id));
+        on('[data-edit-variant]', () => variantDialog(it.variantId, () => shopItemDialog(id)));
+        zone.querySelectorAll('[data-pick-variant]').forEach((b) => {
+          b.onclick = () => {
+            it.variantId = b.dataset.pickVariant || null;
+            save();
+            zone.innerHTML = pricesSection(it);
+            bindZone();
+          };
+        });
+      };
+      bindZone();
       el.querySelector('form').onsubmit = (ev) => {
         ev.preventDefault();
         const f = ev.target;
@@ -2670,6 +2686,47 @@
   }
   const storeName = (id) => storeLabel(storeById(id));
 
+  // Preise gelten pro Kette (Billa, Spar …): Filialen gleichen Namens teilen sich ihre Preise.
+  const chainName = (id) => { const s = storeById(id); return s ? s.name : ''; };
+
+  // Sorten eines Artikels („Wasa Roggen · 275 g“), gemerkt je Preis-Schlüssel und im Haushalt geteilt.
+  function variants() {
+    if (!Array.isArray(state.variants)) state.variants = [];
+    return state.variants;
+  }
+  const variantsOf = (key) => variants().filter((v) => v.key === key);
+  const variantById = (id) => byId(variants(), id);
+  const variantLabel = (v) => (v ? [v.name, Pr.formatQty(v.qty)].filter(Boolean).join(' · ') : '');
+  /** Gewählte Sorte eines Einkaufsartikels (oder null = „egal welche“). */
+  const itemVariant = (it) => { const v = it.variantId && variantById(it.variantId); return v && v.key === Pr.priceKey(it) ? v : null; };
+  const SEP = '\u0001';
+  /** Vergleichs-Schlüssel eines Artikels: Preis-Schlüssel plus gewählte Sorte. */
+  const offerKey = (it) => { const v = itemVariant(it); return v ? Pr.priceKey(it) + SEP + v.id : Pr.priceKey(it); };
+
+  /**
+   * Preisvergleich über Ketten und Sorten: { ids, of, offer(offerKey, kettenId) }.
+   * Bei „egal welche“ zählt der günstigste Grundpreis, umgerechnet auf die übliche Packung.
+   */
+  function priceView() {
+    const ch = Pr.chains(stores());
+    const prices = Pr.pricesByChain(allPrices(), ch);
+    const refs = new Map();
+    const offer = (okey, chainId) => {
+      const [key, vid] = okey.split(SEP);
+      const vs = variantsOf(key);
+      if (!refs.has(key)) refs.set(key, Pr.usualQty(prices, key, vs));
+      return Pr.itemOffer(prices, { key, variantId: vid || null }, vs, chainId, undefined, vid ? null : refs.get(key));
+    };
+    return { ids: ch.ids, of: ch.of, offer };
+  }
+
+  /** Preis zum Anzeigen: Packungspreis plus Sorte und Grundpreis. */
+  function offerText(o) {
+    const v = o.variantId && variantById(o.variantId);
+    const unit = o.unit != null ? Pr.formatUnitPrice(o.packCents || o.cents, o.qty) : '';
+    return { price: Pr.formatEuro(o.packCents || o.cents), sub: [v ? variantLabel(v) : '', unit].filter(Boolean).join(' · ') };
+  }
+
   /** Markt zu einem Namen aus Open Prices finden („LIDL“ ↔ „Lidl“, „Aldi Süd“ ↔ „ALDI“). */
   function matchStore(name) {
     const n = Pr.norm(name);
@@ -2681,27 +2738,29 @@
   function savePrice(it, storeId, cents, opts) {
     const o = opts || {};
     state.prices = Pr.addPrice(allPrices(), {
-      id: uid(), key: Pr.priceKey(it), name: it.name, storeId, cents,
+      id: uid(), key: Pr.priceKey(it), name: it.name, storeId, cents, variantId: o.variantId || null,
       at: o.at || Date.now(), by: myMemberId() || null, source: o.source || 'me', discounted: !!o.discounted,
     });
   }
 
   /** Kurzer Preis-Hinweis an einer Kachel. */
-  function priceHint(it) {
+  function priceHint(it, view) {
     if (!stores().length) return '';
-    const key = Pr.priceKey(it);
-    const cmp = Pr.compareItem(allPrices(), key, storeIds());
+    const pv = view || priceView();
+    const cmp = Pr.compareItem(pv.offer, offerKey(it), pv.ids);
     if (!cmp.length) return '';
+    // Bei „egal welche“ mit Mengen den Grundpreis zeigen, sonst den Packungspreis.
+    const show = (o) => (!itemVariant(it) && o.unit != null ? Pr.formatUnitPrice(o.packCents || o.cents, o.qty) : Pr.formatEuro(o.packCents || o.cents));
     const here = shopStore();
     const cheapest = cmp[0];
     if (here) {
-      const mine = cmp.find((c) => c.storeId === here.id);
-      if (!mine) return `<span class="tile-price">ab ${Pr.formatEuro(cheapest.price.cents)} · ${esc(storeName(cheapest.storeId))}</span>`;
-      const better = cheapest.storeId !== here.id && mine.price.cents - cheapest.price.cents >= 5;
-      return `<span class="tile-price ${better ? '' : 'good'}">≈ ${Pr.formatEuro(mine.price.cents)}${better ? '' : ' ✓'}</span>${better
-        ? `<span class="tile-price cheaper">💡 ${esc(storeName(cheapest.storeId))} ${Pr.formatEuro(cheapest.price.cents)}</span>` : ''}`;
+      const mine = cmp.find((c) => c.storeId === pv.of[here.id]);
+      if (!mine) return `<span class="tile-price">ab ${show(cheapest.price)} · ${esc(chainName(cheapest.storeId))}</span>`;
+      const better = cheapest.storeId !== mine.storeId && mine.price.cents - cheapest.price.cents >= 5;
+      return `<span class="tile-price ${better ? '' : 'good'}">≈ ${show(mine.price)}${better ? '' : ' ✓'}</span>${better
+        ? `<span class="tile-price cheaper">💡 ${esc(chainName(cheapest.storeId))} ${show(cheapest.price)}</span>` : ''}`;
     }
-    return `<span class="tile-price">ab ${Pr.formatEuro(cheapest.price.cents)} · ${esc(storeName(cheapest.storeId))}</span>`;
+    return `<span class="tile-price">ab ${show(cheapest.price)} · ${esc(chainName(cheapest.storeId))}</span>`;
   }
 
   /** Auswahl „Ich kaufe bei“ und der Preisvergleich der offenen Liste. */
@@ -2709,26 +2768,28 @@
     const here = shopStore();
     const chips = stores().map((s) => `<button class="chip ${here && here.id === s.id ? 'on' : ''}" data-action="shop-store" data-id="${s.id}">${esc(storeLabel(s))}</button>`).join('');
     let compare = '';
-    if (stores().length >= 2 && open.length) {
-      const keys = [...new Set(open.map(Pr.priceKey))];
-      const b = Pr.basket(allPrices(), keys, storeIds());
+    const pv = priceView();
+    if (pv.ids.length >= 2 && open.length) {
+      const keys = [...new Set(open.map(offerKey))];
+      const b = Pr.basket(pv.offer, keys, pv.ids);
       if (b.best) {
-        const nameOf = (id) => esc(storeName(id));
+        const nameOf = (id) => esc(chainName(id));
         const missing = keys.length - b.commonKeys.length;
         const assign = b.split && b.split.saving >= 50
           ? b.commonKeys.map((k) => {
-            const c = Pr.compareItem(allPrices(), k, b.split.stores)[0];
-            const it = open.find((i) => Pr.priceKey(i) === k);
-            return `<li>${it ? `${it.icon} ${esc(it.name)}` : esc(k)} → ${nameOf(c.storeId)} ${Pr.formatEuro(c.price.cents)}</li>`;
+            const c = Pr.compareItem(pv.offer, k, b.split.stores)[0];
+            const it = open.find((i) => offerKey(i) === k);
+            const t = offerText(c.price);
+            return `<li>${it ? `${it.icon} ${esc(it.name)}` : ''} → ${nameOf(c.storeId)} ${t.price}${t.sub ? ` <span class="muted">(${esc(t.sub)})</span>` : ''}</li>`;
           }).join('') : '';
         compare = `<div class="price-panel">
           <strong>💶 Am günstigsten: ${nameOf(b.best.storeId)}</strong>
           <ul class="price-rank">${b.common.map((c, i) => `<li class="${i === 0 ? 'best' : ''}"><span>${nameOf(c.storeId)}</span><span>${Pr.formatEuro(c.total)}${i ? ` <small class="muted">+${Pr.formatEuro(c.total - b.common[0].total)}</small>` : ''}</span></li>`).join('')}</ul>
-          <p class="small muted">Verglichen über ${b.commonKeys.length} Artikel mit Preisen in allen Märkten${missing ? ` · für ${missing} fehlen noch Preise` : ''}.</p>
+          <p class="small muted">Verglichen über ${b.commonKeys.length} Artikel mit Preisen in allen Ketten${missing ? ` · für ${missing} fehlen noch Preise` : ''}. Bei „egal welche Sorte“ zählt die günstigste pro kg/l.</p>
           ${assign ? `<details class="follow"><summary>✂️ Aufteilen spart ${Pr.formatEuro(b.split.saving)}</summary><ul class="small">${assign}</ul></details>` : ''}
         </div>`;
       } else {
-        compare = '<p class="small muted price-tip">💡 Trag beim Einkaufen Preise ein – sobald dieselben Artikel aus zwei Märkten bekannt sind, zeigt die App, wo deine Liste am günstigsten ist.</p>';
+        compare = '<p class="small muted price-tip">💡 Trag beim Einkaufen Preise ein – sobald dieselben Artikel aus zwei Ketten bekannt sind, zeigt die App, wo deine Liste am günstigsten ist.</p>';
       }
     }
     return `<div class="price-bar">
@@ -2738,42 +2799,165 @@
       </div>`;
   }
 
-  /** Preis eintragen: Markt wählen, Betrag eingeben. */
+  /** Preis eintragen: Markt und Sorte wählen, Betrag eingeben – mit Grundpreis. */
   function priceDialog(id, presetStoreId) {
     const it = shopItem(id);
     if (!it) return;
     if (!stores().length) { storesDialog(() => priceDialog(id, presetStoreId)); return; }
+    const key = Pr.priceKey(it);
     let storeId = presetStoreId || (shopStore() || {}).id || stores()[0].id;
-    const last = () => Pr.storePrice(allPrices(), Pr.priceKey(it), storeId);
+    // Sorte: die gewählte, sonst die zuletzt gekaufte.
+    const lastWithVariant = allPrices().filter((p) => p.key === key && p.variantId && variantById(p.variantId)).sort((a, b) => b.at - a.at)[0];
+    let variantId = (itemVariant(it) || {}).id || (lastWithVariant && lastWithVariant.variantId) || null;
+    let newVariant = false;
+    let typed = '';
+    let discounted = false;
+    const last = () => {
+      const ch = Pr.chains(stores());
+      return Pr.storePrice(Pr.pricesByChain(allPrices(), ch).filter((p) => (p.variantId || null) === variantId), key, ch.of[storeId]);
+    };
     const draw = () => openModal(`
       <h2>💶 ${it.icon} ${esc(it.name)}</h2>
       <p class="small muted">Was hat es gekostet?${it.spec ? ` (${esc(it.spec)})` : ''}</p>
       <div class="list-chips">${stores().map((s) => `<button class="chip ${s.id === storeId ? 'on' : ''}" data-store="${s.id}">${esc(storeLabel(s))}</button>`).join('')}</div>
+      <p class="small muted">Sorte</p>
+      <div class="list-chips">
+        <button class="chip ${!variantId && !newVariant ? 'on' : ''}" data-variant="">ohne Angabe</button>
+        ${variantsOf(key).map((v) => `<button class="chip ${v.id === variantId && !newVariant ? 'on' : ''}" data-variant="${v.id}">${esc(variantLabel(v))}</button>`).join('')}
+        <button class="chip ${newVariant ? 'on' : ''}" data-variant-new>＋ neue Sorte</button>
+      </div>
       <form class="form">
-        <label>Preis in €<input class="input price-input" name="price" inputmode="decimal" autocomplete="off" placeholder="z. B. 1,79" value="${last() ? Pr.formatEuro(last().cents).replace(' €', '') : ''}"></label>
-        <label class="check-label"><input type="checkbox" name="discounted"> War im Angebot</label>
-        <p class="small bad-text" data-err hidden>Bitte einen Preis wie 1,79 eingeben.</p>
+        ${newVariant ? `<div class="variant-new">
+          <label>Sorte / Marke<input class="input" name="vname" maxlength="40" placeholder="z. B. Wasa Roggen"></label>
+          <label>Packungsgröße<input class="input" name="vqty" maxlength="20" placeholder="z. B. 275 g, 1,5 l, 6 x 0,5 l"></label></div>` : ''}
+        <label>Preis in €<input class="input price-input" name="price" inputmode="decimal" autocomplete="off" placeholder="z. B. 1,79" value="${esc(typed || (last() ? Pr.formatEuro(last().cents).replace(' €', '') : ''))}"></label>
+        <p class="small muted" data-unit></p>
+        <label class="check-label"><input type="checkbox" name="discounted" ${discounted ? 'checked' : ''}> War im Angebot</label>
+        <p class="small bad-text" data-err hidden></p>
         <div class="btn-row">
           <button type="button" class="btn" data-cancel>Abbrechen</button>
           <button type="submit" class="btn primary">Speichern</button>
         </div>
       </form>`, (el) => {
-      el.querySelectorAll('[data-store]').forEach((b) => { b.onclick = () => { storeId = b.dataset.store; draw(); }; });
-      el.querySelector('[data-cancel]').onclick = closeModal;
       const form = el.querySelector('form');
-      setTimeout(() => { form.price.focus(); form.price.select(); }, 50);
+      const keep = () => { typed = form.price.value; discounted = form.discounted.checked; };
+      el.querySelectorAll('[data-store]').forEach((b) => { b.onclick = () => { keep(); typed = ''; storeId = b.dataset.store; draw(); }; });
+      el.querySelectorAll('[data-variant]').forEach((b) => { b.onclick = () => { keep(); typed = ''; variantId = b.dataset.variant || null; newVariant = false; draw(); }; });
+      el.querySelector('[data-variant-new]').onclick = () => { keep(); newVariant = true; draw(); };
+      el.querySelector('[data-cancel]').onclick = closeModal;
+      const unitOut = el.querySelector('[data-unit]');
+      const qtyNow = () => (newVariant ? Pr.parseQty(form.vqty.value) : (variantById(variantId) || {}).qty || null);
+      const showUnit = () => {
+        const cents = Pr.parseEuro(form.price.value);
+        const q = qtyNow();
+        unitOut.textContent = cents && q ? `= ${Pr.formatUnitPrice(cents, q)}` : '';
+      };
+      form.price.oninput = showUnit;
+      if (form.vqty) form.vqty.oninput = showUnit;
+      showUnit();
+      setTimeout(() => { if (newVariant) form.vname.focus(); else { form.price.focus(); form.price.select(); } }, 50);
       form.onsubmit = (ev) => {
         ev.preventDefault();
+        const err = el.querySelector('[data-err]');
         const cents = Pr.parseEuro(form.price.value);
-        if (!cents) { el.querySelector('[data-err]').hidden = false; return; }
-        savePrice(it, storeId, cents, { discounted: form.discounted.checked });
+        if (!cents) { err.textContent = 'Bitte einen Preis wie 1,79 eingeben.'; err.hidden = false; return; }
+        let vid = variantId;
+        if (newVariant) {
+          const name = form.vname.value.trim();
+          const qty = Pr.parseQty(form.vqty.value);
+          if (!name && !qty) { err.textContent = 'Bitte Sorte oder Packungsgröße angeben – oder „ohne Angabe“ wählen.'; err.hidden = false; return; }
+          if (form.vqty.value.trim() && !qty) { err.textContent = 'Packungsgröße bitte wie „275 g“, „1,5 l“ oder „6 Stk“.'; err.hidden = false; return; }
+          vid = addVariant(key, name, qty).id;
+        }
+        savePrice(it, storeId, cents, { discounted: form.discounted.checked, variantId: vid });
         save();
         closeModal();
         render();
-        toast(`💶 ${it.name}: ${Pr.formatEuro(cents)} bei ${storeName(storeId)} gemerkt`);
+        const v = vid && variantById(vid);
+        toast(`💶 ${it.name}${v ? ` (${variantLabel(v)})` : ''}: ${Pr.formatEuro(cents)} bei ${chainName(storeId)} gemerkt`);
       };
     });
     draw();
+  }
+
+  /** Neue Sorte anlegen – gibt es eine gleiche schon, wird die genommen. */
+  function addVariant(key, name, qty) {
+    const n = String(name || '').trim().slice(0, 40);
+    const same = variantsOf(key).find((v) => Pr.norm(v.name) === Pr.norm(n) && Pr.formatQty(v.qty) === Pr.formatQty(qty));
+    if (same) return same;
+    const v = { id: uid(), key, name: n, qty: qty || null };
+    variants().push(v);
+    return v;
+  }
+
+  /** Neue Sorte für einen Einkaufsartikel – wird gleich ausgewählt. */
+  function newVariantDialog(id) {
+    const it = shopItem(id);
+    if (!it) return;
+    openModal(`
+      <h2>🏷️ Neue Sorte · ${esc(it.name)}</h2>
+      <form class="form">
+        <label>Sorte / Marke<input class="input" name="vname" maxlength="40" placeholder="z. B. Wasa Roggen"></label>
+        <label>Packungsgröße<input class="input" name="vqty" maxlength="20" placeholder="z. B. 275 g, 1,5 l, 6 x 0,5 l"></label>
+        <p class="small muted">Mit Packungsgröße vergleicht die App auch verschieden große Packungen fair (Preis pro kg/l).</p>
+        <p class="small bad-text" data-err hidden></p>
+        <div class="btn-row">
+          <button type="button" class="btn" data-cancel>Abbrechen</button>
+          <button type="submit" class="btn primary">Speichern</button>
+        </div>
+      </form>`, (el) => {
+      el.querySelector('[data-cancel]').onclick = () => shopItemDialog(id);
+      setTimeout(() => el.querySelector('[name=vname]').focus(), 50);
+      el.querySelector('form').onsubmit = (ev) => {
+        ev.preventDefault();
+        const f = ev.target;
+        const err = el.querySelector('[data-err]');
+        const qty = Pr.parseQty(f.vqty.value);
+        if (!f.vname.value.trim() && !qty) { err.textContent = 'Bitte Sorte oder Packungsgröße angeben.'; err.hidden = false; return; }
+        if (f.vqty.value.trim() && !qty) { err.textContent = 'Packungsgröße bitte wie „275 g“, „1,5 l“ oder „6 Stk“.'; err.hidden = false; return; }
+        it.variantId = addVariant(Pr.priceKey(it), f.vname.value, qty).id;
+        save();
+        shopItemDialog(id);
+      };
+    });
+  }
+
+  /** Sorte bearbeiten oder löschen (Preise der Sorte bleiben „ohne Angabe“ erhalten). */
+  function variantDialog(vid, after) {
+    const v = variantById(vid);
+    if (!v) return;
+    openModal(`
+      <h2>Sorte bearbeiten</h2>
+      <form class="form">
+        <label>Sorte / Marke<input class="input" name="vname" maxlength="40" value="${esc(v.name)}" placeholder="z. B. Wasa Roggen"></label>
+        <label>Packungsgröße<input class="input" name="vqty" maxlength="20" value="${esc(Pr.formatQty(v.qty))}" placeholder="z. B. 275 g"></label>
+        <p class="small bad-text" data-err hidden>Packungsgröße bitte wie „275 g“, „1,5 l“ oder „6 Stk“.</p>
+        <div class="btn-row">
+          <button type="button" class="btn danger" data-del>Löschen</button>
+          <button type="button" class="btn" data-cancel>Abbrechen</button>
+          <button type="submit" class="btn primary">Speichern</button>
+        </div>
+      </form>`, (el) => {
+      el.querySelector('[data-cancel]').onclick = () => (after ? after() : closeModal());
+      el.querySelector('[data-del]').onclick = () => {
+        if (!confirm(`Sorte „${variantLabel(v)}“ löschen? Ihre Preise bleiben ohne Sorte erhalten.`)) return;
+        state.variants = variants().filter((x) => x.id !== v.id);
+        for (const p of allPrices()) if (p.variantId === v.id) p.variantId = null;
+        for (const i of state.shoppingItems || []) if (i.variantId === v.id) i.variantId = null;
+        save();
+        if (after) after(); else closeModal();
+      };
+      el.querySelector('form').onsubmit = (ev) => {
+        ev.preventDefault();
+        const f = ev.target;
+        const qty = Pr.parseQty(f.vqty.value);
+        if (f.vqty.value.trim() && !qty) { el.querySelector('[data-err]').hidden = false; return; }
+        v.name = f.vname.value.trim().slice(0, 40);
+        v.qty = qty || null;
+        save();
+        if (after) after(); else closeModal();
+      };
+    });
   }
 
   /** Märkte verwalten: Ort mit Vorschlägen, Filialen in der Nähe mit Adresse (OpenStreetMap). */
@@ -2905,9 +3089,11 @@
         list.querySelectorAll('[data-del]').forEach((b) => {
           b.onclick = () => {
             const s = storeById(b.dataset.del);
-            if (!confirm(`„${storeLabel(s)}“ mit allen gemerkten Preisen entfernen?`)) return;
+            const sibling = stores().find((x) => x.id !== s.id && Pr.norm(x.name) === Pr.norm(s.name));
+            if (!confirm(sibling ? `„${storeLabel(s)}“ entfernen? Die Preise bleiben bei ${s.name} erhalten.` : `„${storeLabel(s)}“ mit allen gemerkten Preisen entfernen?`)) return;
             state.stores = stores().filter((x) => x.id !== s.id);
-            state.prices = allPrices().filter((x) => x.storeId !== s.id);
+            if (sibling) allPrices().forEach((x) => { if (x.storeId === s.id) x.storeId = sibling.id; });
+            else state.prices = allPrices().filter((x) => x.storeId !== s.id);
             if (ui.shopStoreId === s.id) setShopStore(null);
             save();
             drawList();
@@ -3020,19 +3206,46 @@
     });
   }
 
-  /** Preise eines Artikels: eigene je Markt und – auf Wunsch – Open Prices. */
+  /** Sorte wählen und Preise eines Artikels: je Kette und – auf Wunsch – Open Prices. */
   function pricesSection(it) {
+    const key = Pr.priceKey(it);
+    const chosen = itemVariant(it);
+    const variantZone = `<div class="variant-zone"><h3>🏷️ Sorte</h3>
+      <div class="list-chips">
+        <button type="button" class="chip ${chosen ? '' : 'on'}" data-pick-variant="">Egal welche</button>
+        ${variantsOf(key).map((v) => `<button type="button" class="chip ${chosen && chosen.id === v.id ? 'on' : ''}" data-pick-variant="${v.id}">${esc(variantLabel(v))}</button>`).join('')}
+        <button type="button" class="chip" data-new-variant>＋ Sorte</button>
+      </div>
+      ${chosen ? `<button type="button" class="link small" data-edit-variant="${chosen.id}">✎ „${esc(variantLabel(chosen))}“ bearbeiten</button>`
+        : '<p class="small muted">Bei „egal welche“ vergleicht die App den Preis pro kg/l – gib dafür bei den Sorten die Packungsgröße an.</p>'}
+    </div>`;
     if (!stores().length) {
-      return `<div class="price-section"><h3>💶 Preise</h3>
+      return `${variantZone}<div class="price-section"><h3>💶 Preise</h3>
         <p class="small muted">Lege deine Märkte an, dann merkt sich die App, was der Artikel wo kostet.</p>
         <div class="btn-row"><button type="button" class="btn" data-price-stores>🏪 Märkte anlegen</button>
         <button type="button" class="btn" data-open-prices>🌍 Open Prices</button></div></div>`;
     }
-    const cmp = Pr.compareItem(allPrices(), Pr.priceKey(it), storeIds());
-    return `<div class="price-section"><h3>💶 Preise</h3>
-      ${cmp.length ? `<ul class="price-rank">${cmp.map((c, i) => `<li class="${i === 0 && cmp.length > 1 ? 'best' : ''}"><span>${esc(storeName(c.storeId))}
-          <small class="muted">· ${new Date(c.price.at).toLocaleDateString('de-DE', { day: 'numeric', month: 'short' })}${c.price.stale ? ' · alt' : ''}</small></span>
-          <span>${Pr.formatEuro(c.price.cents)}</span></li>`).join('')}</ul>` : '<p class="small muted">Noch kein Preis gemerkt.</p>'}
+    const pv = priceView();
+    const cmp = Pr.compareItem(pv.offer, offerKey(it), pv.ids);
+    // Mit fester Sorte: Hinweis, wenn eine andere Sorte pro kg/l deutlich günstiger ist.
+    let tip = '';
+    if (chosen && chosen.qty && cmp.length) {
+      const any = Pr.compareItem((k, c) => pv.offer(key, c), key, pv.ids)[0];
+      const mineUnit = cmp[0].price.unit;
+      if (any && any.price.unit != null && mineUnit != null && any.price.variantId !== chosen.id && any.price.unit < mineUnit * 0.9) {
+        const t = offerText(any.price);
+        tip = `<p class="small price-tip">💡 Günstiger pro ${esc(any.price.qty.base)}: ${esc(t.sub)} bei ${esc(chainName(any.storeId))} (${t.price})</p>`;
+      }
+    }
+    return `${variantZone}<div class="price-section"><h3>💶 Preise${chosen ? ` · ${esc(chosen.name || Pr.formatQty(chosen.qty))}` : ''}</h3>
+      ${cmp.length ? `<ul class="price-rank">${cmp.map((c, i) => {
+        const t = offerText(c.price);
+        return `<li class="${i === 0 && cmp.length > 1 ? 'best' : ''}"><span>${esc(chainName(c.storeId))}
+          <small class="muted">${t.sub && !chosen ? `· ${esc(t.sub)} ` : chosen && c.price.unit != null ? `· ${esc(Pr.formatUnitPrice(c.price.cents, c.price.qty))} ` : ''}· ${new Date(c.price.at).toLocaleDateString('de-DE', { day: 'numeric', month: 'short' })}${c.price.stale ? ' · alt' : ''}</small></span>
+          <span>${t.price}</span></li>`;
+      }).join('')}</ul>` : `<p class="small muted">Noch kein Preis${chosen ? ' für diese Sorte' : ''} gemerkt.</p>`}
+      ${tip}
+      <p class="tiny muted">Preise gelten für alle Filialen einer Kette.</p>
       <div class="btn-row"><button type="button" class="btn" data-add-price>＋ Preis eintragen</button>
         <button type="button" class="btn" data-open-prices>🌍 Open Prices</button></div></div>`;
   }
@@ -3082,7 +3295,11 @@
             s = addStore(r.store);
           }
           const at = r.date ? Date.parse(r.date) : Date.now();
-          savePrice(it, s.id, r.cents, { source: 'openprices', discounted: r.discounted, at: Number.isFinite(at) ? Math.min(at, Date.now()) : Date.now() });
+          // Produkt mit Packungsgröße → als Sorte merken („Wasa Roggen · 275 g“).
+          const qty = Pr.parseQty(r.quantity);
+          const vname = r.product && r.brand && !Pr.norm(r.product).includes(Pr.norm(String(r.brand).split(',')[0])) ? `${String(r.brand).split(',')[0]} ${r.product}` : (r.product || '');
+          const variantId = qty || vname ? addVariant(Pr.priceKey(it), vname, qty).id : null;
+          savePrice(it, s.id, r.cents, { source: 'openprices', discounted: r.discounted, variantId, at: Number.isFinite(at) ? Math.min(at, Date.now()) : Date.now() });
           save();
           b.replaceWith(Object.assign(document.createElement('span'), { className: 'small good-text', textContent: `✓ bei ${s.name}` }));
         };
@@ -4328,6 +4545,7 @@
     if (!Array.isArray(state.plants)) state.plants = [];
     if (!Array.isArray(state.stores)) state.stores = [];
     if (!Array.isArray(state.prices)) state.prices = [];
+    if (!Array.isArray(state.variants)) state.variants = [];
     if (!state.settings.perPersonBudget) {
       // Bisher gab es ein gemeinsames Budget für alle – jetzt hat jede Person ihr eigenes.
       // Aufteilen, damit der Plan insgesamt gleich viel Zeit vorsieht wie vorher.

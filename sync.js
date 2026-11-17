@@ -27,6 +27,7 @@
     { key: 'shoppingItems', kind: 'item' },
     { key: 'stores', kind: 'store', ordered: true },
     { key: 'prices', kind: 'price' },
+    { key: 'variants', kind: 'variant' },
   ];
   const SETTINGS_ID = 'main';
   // Persönliche Einstellungen: bleiben auf dem Gerät.
