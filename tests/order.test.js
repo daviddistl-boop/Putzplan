@@ -52,3 +52,37 @@ test('Reihenfolge: Laufenlassen zuerst, dann Raum für Raum in Raum-Reihenfolge'
   assert.deepStrictEqual(g.map((x) => x.roomId), [null, 'w', 'k']);
   assert.deepStrictEqual(g.map((x) => x.tasks.map((t) => t.task.id)), [[3], [4, 2], [5, 6, 1]]);
 });
+
+test('„Erst nach“: im Raum direkt hinter die Vorgängerin, über Räume hinweg Raum zuerst', () => {
+  const tasks = [
+    { id: 'a', name: 'Tisch abwischen', roomId: 'w' },
+    { id: 'b', name: 'Tisch abräumen', roomId: 'w' },
+    { id: 'c', name: 'Staubsaugen', roomId: 'w' },
+    { id: 'd', name: 'Arbeitsflächen abwischen', roomId: 'k', after: 'c' }, // Küche erst nach dem Saugen im Wohnzimmer
+    { id: 'e', name: 'Spiegel putzen', roomId: 'w', after: 'a' }, // Spiegel erst nach dem Tisch (Staub-Schritt käme sonst vorher)
+  ];
+  const g = S.cleaningOrder(tasks, [{ id: 'k' }, { id: 'w' }]);
+  assert.deepStrictEqual(g.map((x) => x.roomId), ['w', 'k']);
+  assert.deepStrictEqual(g[0].tasks.map((x) => x.task.id), ['b', 'a', 'e', 'c']);
+  // Kreis bricht sicher ab
+  const loop = S.cleaningOrder([{ id: 1, name: 'A', roomId: 'r', after: 2 }, { id: 2, name: 'B', roomId: 'r', after: 1 }], []);
+  assert.strictEqual(loop[0].tasks.length, 2);
+});
+
+test('Wichtigkeit: „Muss“ kommt trotz vollem Budget in den Plan, „Kann warten“ nur bei freier Zeit', () => {
+  const day = 20000;
+  const t = (id, name, minutes, priority) => ({ id, roomId: 'r', name, interval: 7, minutes, lastDone: day - 10, priority });
+  const state = {
+    rooms: [{ id: 'r', name: 'R' }], members: [], history: [],
+    tasks: [t('n1', 'Normal', 15), t('m', 'Muss', 10, 'must'), t('o', 'Kann', 10, 'optional'), t('m2', 'Muss 2', 20, 'must')],
+    settings: { minutesPerWeekday: [30, 30, 30, 30, 30, 30, 30] },
+  };
+  const ids = S.planDays(state, day, 1)[0].items.map((i) => i.task.id);
+  assert.ok(ids.includes('m') && ids.includes('m2'), 'Muss ist dabei, auch über das Budget');
+  assert.deepStrictEqual(ids.slice(0, 2).sort(), ['m', 'm2']);
+  assert.ok(!ids.includes('o'), 'Kann warten fällt raus, weil das Budget voll ist');
+  state.settings.minutesPerWeekday = [60, 60, 60, 60, 60, 60, 60];
+  assert.ok(S.planDays(state, day, 1)[0].items.some((i) => i.task.id === 'o'));
+  assert.strictEqual(S.priorityOf({ priority: 'must' }).short, 'Muss');
+  assert.strictEqual(S.priorityOf({}).key, 'normal');
+});

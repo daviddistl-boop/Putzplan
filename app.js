@@ -701,6 +701,10 @@
       render();
       return;
     }
+    const before = task(taskId).after;
+    if (before && s.taskIds.includes(before) && !s.doneIds.includes(before) && task(before)) {
+      toast(`Tipp: „${task(before).name}“ kommt eigentlich vorher – trotzdem abgehakt.`);
+    }
     const elapsed = sessionElapsed(s);
     const tookMs = elapsed - s.lastMark;
     s.lastMark = elapsed;
@@ -926,6 +930,8 @@
               ${bonus.has(id) ? '<span class="badge good">Bonus ✨</span>' : ''}
               ${added.has(id) && !s.roomId ? '<span class="badge">Dazugenommen</span>' : ''}
               ${t.oneOff ? '<span class="badge">Einmalig</span>' : ''}
+              ${priorityBadge(t)}
+              ${!isDone && t.after && s.taskIds.includes(t.after) && !doneSet.has(t.after) && task(t.after) ? `<span class="badge">⏳ nach „${esc(task(t.after).name)}“</span>` : ''}
               ${willMove ? '<span class="badge">→ morgen</span>' : ''}</div>
           </div>
           ${avatar(member(s.memberIds[id]))}
@@ -1056,6 +1062,7 @@
         ${t.note ? `<div class="row-note">${esc(t.note)}</div>` : ''}
         <div class="row-sub">${r ? esc(r.name) : ''} · ${minutesLabel(t)}${allergyBoosted(t) || t.allergyKey ? ' · 🤧' : ''}
           ${overdue ? `<span class="badge bad">${dueText(t)}</span>` : ''}
+          ${priorityBadge(t)}
           ${tag ? `<span class="badge">${tag}</span>` : ''}</div>
         <div class="dirt"><span style="width:${Math.min(100, u * 100)}%;background:${dirtColor(u)}"></span></div>
       </div>
@@ -1441,6 +1448,10 @@
           ${[['', 'Keine Bodenaufgabe'], ['vacuum', 'Staubsaugen (Saugroboter)'], ['mop', 'Boden wischen (Wischroboter)']]
             .map(([v, l]) => `<option value="${v}" ${S.floorType(t) === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>` : ''}
         ${state.members.length ? `<label>Zuständig<select class="input" name="assignee">${memberOptions(t.assignee, (room(t.roomId) && member(room(t.roomId).ownerId)) ? `Wem der Raum gehört (${esc(member(room(t.roomId).ownerId).name)})` : 'Automatisch verteilen')}</select></label>` : ''}
+        <label>Wichtigkeit<select class="input" name="priority">${S.PRIORITIES.map((p) => `<option value="${p.key}" ${S.priorityOf(t).key === p.key ? 'selected' : ''}>${p.icon ? `${p.icon} ` : ''}${p.label}</option>`).join('')}</select></label>
+        <p class="tiny muted">❗ Muss: kommt immer in den Plan, sobald sie dran ist – auch wenn die Zeit knapp ist. 💤 Kann warten: nur, wenn noch Zeit übrig ist.</p>
+        <label>Erst nach …<select class="input" name="after">${afterOptions(t)}</select></label>
+        <p class="tiny muted">Im Putz-Timer kommt diese Aufgabe dann erst nach der gewählten dran (z. B. erst saugen, dann wischen).</p>
         ${t.trigger ? '' : followUpFields(t)}
         ${taskId ? `<label class="check-label"><input type="checkbox" name="paused" ${t.paused ? 'checked' : ''}> Pausieren (z. B. im Urlaub)</label>` : t.trigger ? '' : `
           <label>Zuletzt erledigt<select class="input" name="last">
@@ -1462,6 +1473,7 @@
         if (!confirm(`„${t.name}“ wirklich löschen?`)) return;
         const follow = new Set(followUpsOf(taskId).map((f) => f.id));
         state.tasks = state.tasks.filter((x) => x.id !== taskId && !follow.has(x.id));
+        for (const x of state.tasks) if (x.after === taskId) x.after = null; // „Erst nach“ zeigt sonst ins Leere
         save(); closeModal(); render();
       };
       form.onsubmit = (ev) => {
@@ -1473,6 +1485,8 @@
           interval: Math.max(1, interval || 7),
           minutes: Math.max(1, parseInt(form.minutes.value, 10) || 10),
           assignee: form.assignee ? form.assignee.value || null : null,
+          priority: form.priority.value === 'normal' ? null : form.priority.value,
+          after: form.after.value || null,
         };
         if (!data.name) return;
         if (form.floor) data.floor = form.floor.value;
@@ -1497,6 +1511,34 @@
         save(); closeModal(); render();
       };
     });
+  }
+
+  /** Auswahl „Erst nach …“: alle anderen Aufgaben nach Raum, ohne solche, die selbst auf diese warten. */
+  function afterOptions(t) {
+    // Wer (über Ecken) nach dieser Aufgabe kommt, darf nicht ihre Vorgängerin werden – sonst ein Kreis.
+    const waiting = new Set();
+    if (t.id) {
+      let grew = true;
+      waiting.add(t.id);
+      while (grew) {
+        grew = false;
+        for (const x of state.tasks) if (x.after && waiting.has(x.after) && !waiting.has(x.id)) { waiting.add(x.id); grew = true; }
+      }
+    }
+    const ok = (x) => !waiting.has(x.id) && !x.plantId && !x.archived;
+    const roomsSorted = state.rooms.slice().sort((a, b) => (a.id === t.roomId ? -1 : b.id === t.roomId ? 1 : 0));
+    return `<option value="">– egal, keine Reihenfolge –</option>${roomsSorted.map((r) => {
+      const list = state.tasks.filter((x) => x.roomId === r.id && ok(x));
+      return list.length ? `<optgroup label="${esc(`${r.icon} ${r.name}`)}">${list.map((x) => `<option value="${x.id}" ${t.after === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</optgroup>` : '';
+    }).join('')}`;
+  }
+
+  /** Kleine Markierung für Wichtigkeit („❗ Muss“ / „💤 Kann warten“). */
+  function priorityBadge(t) {
+    const p = S.priorityOf(t);
+    if (p.key === 'must') return '<span class="badge bad">❗ Muss</span>';
+    if (p.key === 'optional') return '<span class="badge">💤 Kann warten</span>';
+    return '';
   }
 
   function addRoom() {

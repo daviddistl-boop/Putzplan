@@ -111,6 +111,15 @@
     return Math.max(1, Math.round(task.interval * factor));
   }
 
+  // Wichtigkeit: „Muss“ kommt immer in den Plan, sobald fällig (auch über das Zeitbudget);
+  // „Kann warten“ nur, wenn noch Zeit übrig ist. Ohne Angabe: normal.
+  const PRIORITIES = [
+    { key: 'must', label: 'Muss erledigt werden', short: 'Muss', icon: '❗', rank: 2 },
+    { key: 'normal', label: 'Normal', short: '', icon: '', rank: 1 },
+    { key: 'optional', label: 'Kann warten', short: 'Kann warten', icon: '💤', rank: 0 },
+  ];
+  const priorityOf = (task) => PRIORITIES.find((p) => p.key === (task && task.priority)) || PRIORITIES[1];
+
   function urgency(task, day, lastDone, settings) {
     if (hasDueDate(task)) return followUpUrgency(task.dueOn, day);
     const last = lastDone !== undefined ? lastDone : task.lastDone;
@@ -292,7 +301,9 @@
       const scored = eligible
         .map((t) => ({ task: t, u: hasDueDate(t) ? followUpUrgency(simDue.get(t.id), day) : urgency(t, day, sim.get(t.id), settings) }))
         .filter((e) => !hasDueDate(e.task) || e.u > 0)
-        .sort((a, b) => b.u - a.u || effectiveInterval(a.task, settings, day) - effectiveInterval(b.task, settings, day));
+        // Fällige zuerst, darunter „Muss“ vor normal vor „Kann warten“, dann nach Dringlichkeit.
+        .sort((a, b) => ((b.u >= 1) - (a.u >= 1)) || (a.u >= 1 && b.u >= 1 ? priorityOf(b.task).rank - priorityOf(a.task).rank : 0)
+          || b.u - a.u || effectiveInterval(a.task, settings, day) - effectiveInterval(b.task, settings, day));
 
       // Wer übernimmt? `strict`: nur wenn es ganz ins Budget passt.
       const choose = (e, strict) => {
@@ -329,16 +340,26 @@
         const pool = withTime.length ? withTime : cands;
         take(e, pool.slice().sort((a, b) => load(a) - load(b) || (weekLoad[a] || 0) - (weekLoad[b] || 0))[0]);
       }
-      // 1. Fällige Aufgaben nach Dringlichkeit.
+      // 0b. Fällige „Muss“-Aufgaben kommen immer dran – notfalls über das Zeitbudget.
+      for (const e of scored) {
+        if (hasDueDate(e.task) || e.u < 1 || priorityOf(e.task).key !== 'must') continue;
+        const cands = solo ? [SOLO] : candidatesFor(e.task, members, rooms);
+        const withTime = cands.filter((k) => budgets[k] > 0);
+        const pool = withTime.length ? withTime : cands;
+        take(e, pool.slice().sort((a, b) => load(a) - load(b) || (weekLoad[a] || 0) - (weekLoad[b] || 0))[0]);
+      }
+      // 1. Fällige Aufgaben nach Wichtigkeit und Dringlichkeit; „Kann warten“ nur, wenn sie ganz reinpasst.
       for (const e of scored) {
         if (hasDueDate(e.task)) continue;
         if (e.u < 1) break;
-        const k = choose(e, false);
+        if (items.some((it) => it.task === e.task)) continue;
+        const k = choose(e, priorityOf(e.task).key === 'optional');
         if (k !== undefined) take(e, k);
       }
       // 2. Freie Zeit mit bald fälligen Aufgaben füllen.
       for (const e of scored) {
         if (hasDueDate(e.task) || e.u >= 1 || e.u < PREFILL_THRESHOLD) continue;
+        if (priorityOf(e.task).key === 'optional') continue; // „Kann warten“ wird nicht vorgezogen.
         if (effectiveInterval(e.task, settings, day) < 3) continue; // Kurze Intervalle lohnen sich nicht vorzuziehen.
         if (items.some((it) => it.task === e.task)) continue;
         const k = choose(e, true);
@@ -400,6 +421,47 @@
   }
 
   /**
+   * „Erst nach …“ (task.after = ID einer anderen Aufgabe) in der Reihenfolge durchsetzen:
+   * im selben Raum rückt die Aufgabe direkt hinter ihre Vorgängerin; in verschiedenen Räumen
+   * kommt der Raum der Vorgängerin zuerst. Kreise werden nach ein paar Runden abgebrochen.
+   */
+  function applyAfter(groups) {
+    for (let round = 0; round < 25; round++) {
+      let changed = false;
+      const where = new Map();
+      groups.forEach((g, gi) => g.tasks.forEach((x, xi) => where.set(x.task.id, [gi, xi])));
+      outer: for (let gi = 0; gi < groups.length; gi++) {
+        for (let bi = 0; bi < groups[gi].tasks.length; bi++) {
+          const b = groups[gi].tasks[bi];
+          const pos = b.task.after != null && where.get(b.task.after);
+          if (!pos) continue;
+          const [ga, ai] = pos;
+          if (ga === gi && ai > bi) {
+            groups[gi].tasks.splice(bi, 1);
+            groups[gi].tasks.splice(ai, 0, b); // ai ist nach dem Entfernen die Stelle direkt hinter der Vorgängerin
+            changed = true;
+            break outer;
+          }
+          if (ga > gi) {
+            if (groups[gi].roomId === null) {
+              // „Zuerst starten“ geht erst, wenn die Vorgängerin erledigt ist: in deren Raum direkt dahinter.
+              groups[gi].tasks.splice(bi, 1);
+              groups[ga].tasks.splice(ai + 1, 0, b);
+            } else {
+              const [g] = groups.splice(gi, 1);
+              groups.splice(ga, 0, g); // Raum der Aufgabe hinter den Raum der Vorgängerin
+            }
+            changed = true;
+            break outer;
+          }
+        }
+      }
+      if (!changed) break;
+    }
+    for (let gi = groups.length - 1; gi >= 0; gi--) if (!groups[gi].tasks.length) groups.splice(gi, 1);
+  }
+
+  /**
    * Aufgaben für den Timer sinnvoll ordnen: Was von selbst läuft, kommt raumübergreifend
    * ganz nach oben („Zuerst starten“); danach Raum für Raum (Reihenfolge wie `rooms`),
    * im Raum nach Schritt. Gibt Gruppen zurück: [{ roomId (null = zuerst starten), tasks: [{ task, step }] }].
@@ -407,7 +469,7 @@
   function cleaningOrder(tasks, rooms) {
     const roomIndex = new Map((rooms || []).map((r, i) => [r.id, i]));
     const withStep = (tasks || []).map((t, i) => ({ task: t, step: cleanStep(t.name), i }));
-    const byStep = (a, b) => (a.step - b.step) || (a.i - b.i);
+    const byStep = (a, b) => (a.step - b.step) || (priorityOf(b.task).rank - priorityOf(a.task).rank) || (a.i - b.i);
     const groups = [];
     const first = withStep.filter((x) => x.step === 0).sort(byStep);
     if (first.length) groups.push({ roomId: null, tasks: first });
@@ -415,10 +477,13 @@
     const roomIds = [...new Set(rest.map((x) => x.task.roomId))]
       .sort((a, b) => (roomIndex.has(a) ? roomIndex.get(a) : 999) - (roomIndex.has(b) ? roomIndex.get(b) : 999));
     for (const id of roomIds) groups.push({ roomId: id, tasks: rest.filter((x) => x.task.roomId === id).sort(byStep) });
+    applyAfter(groups);
     return groups.map((g) => ({ roomId: g.roomId, tasks: g.tasks.map(({ task, step }) => ({ task, step })) }));
   }
 
   const api = {
+    PRIORITIES,
+    priorityOf,
     CLEAN_STEPS,
     cleanStep,
     cleaningOrder,
