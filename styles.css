@@ -294,6 +294,7 @@ h2 { font-size: 1.05rem; margin: 1.4em 0 0.6em; }
   transition: background 0.3s;
 }
 .timer-ring.low { background: conic-gradient(var(--bad) calc(var(--p) * 1%), var(--surface-2) 0); }
+.timer-ring.stopwatch { background: conic-gradient(var(--good) calc(var(--p) * 1%), var(--surface-2) 0); }
 .timer-ring > div {
   width: 180px; height: 180px; border-radius: 50%; background: var(--bg);
   display: grid; place-content: center; text-align: center;

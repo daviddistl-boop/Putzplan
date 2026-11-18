@@ -335,8 +335,9 @@
     return Math.max(0, (s.pausedAt || Date.now()) - s.startedAt - s.pausedMs);
   }
 
+  /** Restzeit; bei der Stoppuhr (ohne festes Ende) unendlich. */
   function sessionRemaining(s) {
-    return s.durationMs - sessionElapsed(s);
+    return s.open ? Infinity : s.durationMs - sessionElapsed(s);
   }
 
   function fmtClock(ms) {
@@ -397,15 +398,18 @@
       <p class="small">${plan.items.length
         ? `Geplant: <strong>${plan.items.length} Aufgabe${plan.items.length === 1 ? '' : 'n'}</strong> · geschätzt ${fmtMinutes(planMin)}`
         : 'Heute ist nichts mehr fällig – der Timer sucht dir passende Aufgaben, die bald dran sind.'}</p>
-      <div class="chip-grid">${options.map((m) => `<button class="chip ${m === chosen ? 'on' : ''}" data-min="${m}">${m} Min.</button>`).join('')}</div>
+      <div class="chip-grid">${options.map((m) => `<button class="chip ${m === chosen ? 'on' : ''}" data-min="${m}">${m} Min.</button>`).join('')}
+        <button class="chip" data-min="open">⏱️ Stoppuhr</button></div>
+      <p class="small muted" data-open-hint hidden>Stoppuhr: ohne Zeitziel einfach loslegen – die Zeit läuft mit, bis du beendest. Ist alles geschafft, kommt die nächste passende Aufgabe dazu.</p>
       <div class="btn-row">
         <button class="btn" data-cancel>Abbrechen</button>
         <button class="btn primary" data-go>▶ Los geht's</button>
       </div>`, (el) => {
       el.querySelectorAll('[data-min]').forEach((b) => {
         b.onclick = () => {
-          chosen = +b.dataset.min;
+          chosen = b.dataset.min === 'open' ? null : +b.dataset.min;
           el.querySelectorAll('[data-min]').forEach((x) => x.classList.toggle('on', x === b));
+          el.querySelector('[data-open-hint]').hidden = chosen !== null;
         };
       });
       el.querySelector('[data-cancel]').onclick = closeModal;
@@ -413,6 +417,7 @@
     });
   }
 
+  /** Startet den Timer – `minutes` = null: Stoppuhr ohne festes Ende. */
   function startSession(minutes) {
     const today = S.today();
     const plan = S.planDays(state, today, 1, doneTodayIds())[0];
@@ -421,7 +426,8 @@
     state.session = {
       day: today,
       startedAt: Date.now(),
-      durationMs: minutes * MIN,
+      durationMs: minutes ? minutes * MIN : null,
+      open: !minutes,
       pausedAt: null,
       pausedMs: 0,
       lastMark: 0,
@@ -445,14 +451,15 @@
   /** Nimmt die nächste passende Aufgabe dazu. Gibt false zurück, wenn keine mehr passt. */
   function addBonusTask(silent) {
     const s = state.session;
-    const remainingMin = sessionRemaining(s) / MIN;
+    // Stoppuhr: kein Zeitlimit – passende Aufgaben bis zu einer Stunde.
+    const remainingMin = s.open ? 60 : sessionRemaining(s) / MIN;
     if (remainingMin < 2) return false;
     const next = S.bonusCandidates(state, S.today(), s.taskIds.concat(doneTodayIds()), remainingMin + 1, personalScope())[0];
     if (!next) return false;
     s.taskIds.push(next.id);
     s.bonusIds.push(next.id);
     s.allDone = false;
-    if (!silent) toast(`Du bist schneller! ✨ Dazu kommt: ${next.name}`);
+    if (!silent) toast(s.open ? `Weiter geht's ✨ Als Nächstes: ${next.name}` : `Du bist schneller! ✨ Dazu kommt: ${next.name}`);
     return true;
   }
 
@@ -678,6 +685,7 @@
 
   function extendSession(minutes) {
     const s = state.session;
+    if (s.open) return;
     s.durationMs = sessionElapsed(s) + Math.max(0, sessionRemaining(s)) + minutes * MIN;
     s.timeUp = false;
     save();
@@ -738,7 +746,7 @@
   function syncTimerAlarm() {
     if (!Native.isNative || !Native.scheduleTimerEnd) return;
     const s = state.session;
-    if (s && !s.pausedAt && !s.timeUp && sessionRemaining(s) > 1000) {
+    if (s && !s.open && !s.pausedAt && !s.timeUp && sessionRemaining(s) > 1000) {
       Native.scheduleTimerEnd(new Date(Date.now() + sessionRemaining(s)), sessionOpenIds(s).length);
     } else {
       Native.cancelTimerEnd();
@@ -773,6 +781,7 @@
     }
     const clock = document.getElementById('session-clock');
     if (!clock || s.timeUp) return;
+    if (s.open) { clock.textContent = fmtClock(sessionElapsed(s)); return; }
     clock.textContent = fmtClock(remaining);
     const ring = document.getElementById('session-ring');
     const pct = Math.max(0, Math.min(100, (remaining / s.durationMs) * 100));
@@ -783,6 +792,7 @@
   }
 
   function paceText(s) {
+    if (s.open) return '';
     const open = sessionOpenIds(s);
     if (!open.length) return '';
     const need = open.reduce((sum, id) => sum + S.estimate(task(id)), 0) * MIN;
@@ -796,7 +806,7 @@
   function viewSession() {
     const s = state.session;
     const remaining = sessionRemaining(s);
-    const pct = Math.max(0, Math.min(100, (remaining / s.durationMs) * 100));
+    const pct = s.open ? 100 : Math.max(0, Math.min(100, (remaining / s.durationMs) * 100));
     const open = sessionOpenIds(s);
     const doneSet = new Set(s.doneIds);
     const bonus = new Set(s.bonusIds);
@@ -819,15 +829,15 @@
     } else if (s.allDone) {
       banner = `<div class="session-banner good">
           <strong>🎉 Alles geschafft!</strong>
-          <p>Für die restliche Zeit passt nichts mehr – genieß die Pause.</p>
+          <p>${s.open ? 'Gerade passt nichts mehr – du hast heute richtig was geschafft.' : 'Für die restliche Zeit passt nichts mehr – genieß die Pause.'}</p>
           <button class="btn primary block" data-action="session-finish">Fertig</button></div>`;
     }
 
     return `
       <header class="session-head">
-        <div id="session-ring" class="timer-ring ${remaining < 2 * MIN ? 'low' : ''}" style="--p:${pct.toFixed(2)}">
-          <div><span id="session-clock" class="clock">${s.timeUp ? '0:00' : fmtClock(remaining)}</span>
-          <small>${s.timeUp ? 'Zeit um' : s.pausedAt ? 'Pausiert' : 'verbleibend'}</small></div>
+        <div id="session-ring" class="timer-ring ${s.open ? 'stopwatch' : remaining < 2 * MIN ? 'low' : ''}" style="--p:${pct.toFixed(2)}">
+          <div><span id="session-clock" class="clock">${s.open ? fmtClock(sessionElapsed(s)) : s.timeUp ? '0:00' : fmtClock(remaining)}</span>
+          <small>${s.timeUp ? 'Zeit um' : s.pausedAt ? 'Pausiert' : s.open ? '⏱️ Stoppuhr' : 'verbleibend'}</small></div>
         </div>
         <p class="muted">${s.doneIds.length} erledigt · ${open.length} offen</p>
         <p id="session-pace" class="small">${s.timeUp || s.allDone ? '' : paceText(s)}</p>
