@@ -307,6 +307,11 @@ h2 { font-size: 1.05rem; margin: 1.4em 0 0.6em; }
 .session-banner.warn { background: color-mix(in srgb, var(--warn) 22%, var(--surface)); }
 .session-list { margin-top: 14px; }
 .session-list .row { cursor: pointer; }
+.session-list .session-room { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 14px 4px 4px; font-weight: 700; list-style: none; }
+.session-list .session-room:first-child { padding-top: 0; }
+.session-list .session-room small { font-weight: 400; color: var(--muted); }
+.session-list .session-room.done span { color: var(--good); }
+.session-list .row.next { box-shadow: 0 0 0 2px var(--good) inset; }
 .check { display: inline-grid; place-items: center; color: #fff; font-weight: 700; }
 .check.checked { background: var(--good); border-color: var(--good); }
 .badge.good { background: color-mix(in srgb, var(--good) 18%, transparent); color: var(--good); }

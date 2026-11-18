@@ -361,7 +361,67 @@
     return Math.round((1 - sum / active.length) * 100);
   }
 
+  // ------------------------------------------------------------ Sinnvolle Putz-Reihenfolge
+  //
+  // Faustregeln der Profis: Was von selbst läuft (Waschmaschine, Spülmaschine, Einwirken)
+  // zuerst starten · erst aufräumen, dann putzen · von oben nach unten (Staub vor Flächen,
+  // Flächen vor Boden) · trocken vor nass (saugen vor wischen) · Müll und Frisches zum Schluss.
+  // Jede Aufgabe bekommt anhand ihres Namens einen Schritt; Reihenfolge der Muster = Vorrang.
+
+  const CLEAN_STEPS = [
+    { key: 'start', label: 'Zuerst starten', icon: '▶️' },
+    { key: 'tidy', label: 'Aufräumen', icon: '🧺' },
+    { key: 'dishes', label: 'Geschirr', icon: '🍽️' },
+    { key: 'dust', label: 'Staub & oben', icon: '🪶' },
+    { key: 'surfaces', label: 'Flächen & Geräte', icon: '🧽' },
+    { key: 'floor', label: 'Boden: saugen', icon: '🧹' },
+    { key: 'mop', label: 'Boden: wischen', icon: '🪣' },
+    { key: 'finish', label: 'Zum Schluss', icon: '✅' },
+  ];
+  const STEP_RULES = [
+    ['finish', /m[uü]ll|altpapier|altglas|handt[uü]cher|abnehmen|gie(ß|ss)en|d[uü]ngen|d[uü]nger|l[uü]ften|wegbringen|zusammenlegen|wegr[aä]umen.*w[aä]sche|w[aä]sche.*wegr[aä]um/i],
+    ['start', /w[aä]sche (waschen|starten)|waschmaschine (an|starten|laufen)|sp[uü]lmaschine (an|starten|einr[aä]umen|laufen)|einweichen|einwirken|bettw[aä]sche|kissen.*waschen|decken.*waschen|tierdecken|kuscheltiere/i],
+    ['tidy', /aufr[aä]um|wegr[aä]um|abr[aä]um|ausr[aä]um|sortier|schuhe|spielzeug|kleidung|ordnung/i],
+    ['dishes', /geschirr|sp[uü]lmaschine|abwasch/i],
+    ['mop', /boden wischen|wischen.*boden|feucht wischen|wischpads|nass/i],
+    // Polster und Gitter vor dem Boden – sonst landet der Staub auf dem frisch gesaugten Boden.
+    ['dust', /pollenschutz|gitter/i],
+    ['surfaces', /sofa|couch|matratze|polster/i],
+    ['floor', /staubsaug|saugen|absaug|fegen|kehren|teppich/i],
+    ['dust', /staub|spinnweb|lampe|regal|bilderrahmen|(^|\s)schr[aä]nke? (aus|ab)wisch|fenster|spiegel|bildschirm|tastatur|lichtschalter|t[uü]rklinken|fensterb[aä]nk|pollenschutz|vorh[aä]ng|gardin/i],
+    ['surfaces', /fl[aä]che|tisch|herd|ofen|mikrowelle|k[uü]hlschrank|waschbecken|toilette|wc|dusche|badewanne|wanne|armatur|sp[uü]le|fliesen|fugen|abfluss|sofa|couch|matratze|polster|fusselrolle|ger[aä]t|filter|tank|station|br[uü]rsten|sensoren|beh[aä]lter|dichtung|abziehen|silikon|kondenswasser|abwischen|reinigen|putzen/i],
+  ];
+
+  /** Schritt einer Aufgabe in der Putz-Reihenfolge (Index in CLEAN_STEPS). */
+  function cleanStep(name) {
+    const n = String(name || '');
+    for (const [key, re] of STEP_RULES) if (re.test(n)) return CLEAN_STEPS.findIndex((s) => s.key === key);
+    return CLEAN_STEPS.findIndex((s) => s.key === 'surfaces');
+  }
+
+  /**
+   * Aufgaben für den Timer sinnvoll ordnen: Was von selbst läuft, kommt raumübergreifend
+   * ganz nach oben („Zuerst starten“); danach Raum für Raum (Reihenfolge wie `rooms`),
+   * im Raum nach Schritt. Gibt Gruppen zurück: [{ roomId (null = zuerst starten), tasks: [{ task, step }] }].
+   */
+  function cleaningOrder(tasks, rooms) {
+    const roomIndex = new Map((rooms || []).map((r, i) => [r.id, i]));
+    const withStep = (tasks || []).map((t, i) => ({ task: t, step: cleanStep(t.name), i }));
+    const byStep = (a, b) => (a.step - b.step) || (a.i - b.i);
+    const groups = [];
+    const first = withStep.filter((x) => x.step === 0).sort(byStep);
+    if (first.length) groups.push({ roomId: null, tasks: first });
+    const rest = withStep.filter((x) => x.step !== 0);
+    const roomIds = [...new Set(rest.map((x) => x.task.roomId))]
+      .sort((a, b) => (roomIndex.has(a) ? roomIndex.get(a) : 999) - (roomIndex.has(b) ? roomIndex.get(b) : 999));
+    for (const id of roomIds) groups.push({ roomId: id, tasks: rest.filter((x) => x.task.roomId === id).sort(byStep) });
+    return groups.map((g) => ({ roomId: g.roomId, tasks: g.tasks.map(({ task, step }) => ({ task, step })) }));
+  }
+
   const api = {
+    CLEAN_STEPS,
+    cleanStep,
+    cleaningOrder,
     dateToDay,
     dayToDate,
     today,

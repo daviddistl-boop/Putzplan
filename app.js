@@ -383,46 +383,89 @@
     return me ? plan.items.filter((i) => !i.memberId || i.memberId === me) : plan.items;
   }
 
+  /** Aufgaben, wenn man sich einen ganzen Raum vornimmt (alles außer Pausiertem und dem, was der Roboter macht). */
+  function roomSessionTasks(roomId) {
+    const done = new Set(doneTodayIds());
+    return state.tasks.filter((t) => t.roomId === roomId && !t.paused && !t.archived && !done.has(t.id)
+      && !S.robotHandles(t, state.settings) && !t.plantId
+      && !(S.hasDueDate(t) && (t.dueOn === null || t.dueOn === undefined)));
+  }
+
   function startSessionDialog() {
     const today = S.today();
     const plan = S.planDays(state, today, 1, doneTodayIds())[0];
     plan.items = myPlanItems(plan);
     const planMin = plan.items.reduce((sum, i) => sum + S.estimate(i.task), 0);
-    const suggested = Math.max(5, Math.round((remainingBudgetToday() || planMin || 15) / 5) * 5);
-    const options = [...new Set([10, 15, 20, 30, 45, 60, suggested])].sort((a, b) => a - b);
-    let chosen = suggested;
-    openModal(`
-      <h2>⏱️ Putz-Timer</h2>
-      <p class="muted">Wie lange möchtest du jetzt putzen? Hake ab, was du schaffst. Bist du schneller, kommt noch etwas dazu –
-        was übrig bleibt, wandert auf morgen.</p>
-      <p class="small">${plan.items.length
-        ? `Geplant: <strong>${plan.items.length} Aufgabe${plan.items.length === 1 ? '' : 'n'}</strong> · geschätzt ${fmtMinutes(planMin)}`
-        : 'Heute ist nichts mehr fällig – der Timer sucht dir passende Aufgaben, die bald dran sind.'}</p>
-      <div class="chip-grid">${options.map((m) => `<button class="chip ${m === chosen ? 'on' : ''}" data-min="${m}">${m} Min.</button>`).join('')}
-        <button class="chip" data-min="open">⏱️ Stoppuhr</button></div>
-      <p class="small muted" data-open-hint hidden>Stoppuhr: ohne Zeitziel einfach loslegen – die Zeit läuft mit, bis du beendest. Ist alles geschafft, kommt die nächste passende Aufgabe dazu.</p>
-      <div class="btn-row">
-        <button class="btn" data-cancel>Abbrechen</button>
-        <button class="btn primary" data-go>▶ Los geht's</button>
-      </div>`, (el) => {
-      el.querySelectorAll('[data-min]').forEach((b) => {
-        b.onclick = () => {
-          chosen = b.dataset.min === 'open' ? null : +b.dataset.min;
-          el.querySelectorAll('[data-min]').forEach((x) => x.classList.toggle('on', x === b));
-          el.querySelector('[data-open-hint]').hidden = chosen !== null;
-        };
+    const rooms = state.rooms.filter((r) => !r.robot && roomSessionTasks(r.id).length);
+    let roomId = null; // null = heutiger Plan
+    let chosen;
+    const draw = () => {
+      const roomTasks = roomId ? roomSessionTasks(roomId) : [];
+      const roomMin = roomTasks.reduce((sum, t) => sum + S.estimate(t), 0);
+      const suggested = roomId
+        ? Math.max(5, Math.round(roomMin / 5) * 5)
+        : Math.max(5, Math.round((remainingBudgetToday() || planMin || 15) / 5) * 5);
+      if (chosen === undefined) chosen = suggested;
+      const options = [...new Set([10, 15, 20, 30, 45, 60, suggested])].sort((x, y) => x - y);
+      const r = roomId && room(roomId);
+      openModal(`
+        <h2>⏱️ Putz-Timer</h2>
+        <p class="small muted">Was nimmst du dir vor?</p>
+        <div class="chip-grid">
+          <button class="chip ${roomId ? '' : 'on'}" data-scope="">📋 Heutiger Plan</button>
+          ${rooms.map((x) => `<button class="chip ${x.id === roomId ? 'on' : ''}" data-scope="${x.id}">${x.icon} ${esc(x.name)} komplett</button>`).join('')}
+        </div>
+        <p class="small">${roomId
+          ? `${r.icon} <strong>${esc(r.name)} komplett:</strong> ${roomTasks.length} Aufgabe${roomTasks.length === 1 ? '' : 'n'} · geschätzt ${fmtMinutes(roomMin)} – in sinnvoller Reihenfolge.`
+          : plan.items.length
+            ? `Geplant: <strong>${plan.items.length} Aufgabe${plan.items.length === 1 ? '' : 'n'}</strong> · geschätzt ${fmtMinutes(planMin)} – Raum für Raum in sinnvoller Reihenfolge.`
+            : 'Heute ist nichts mehr fällig – der Timer sucht dir passende Aufgaben, die bald dran sind.'}</p>
+        <p class="small muted">Wie lange? Hake ab, was du schaffst.${roomId ? '' : ' Bist du schneller, kommt noch etwas dazu – was übrig bleibt, wandert auf morgen.'}</p>
+        <div class="chip-grid">${options.map((m) => `<button class="chip ${m === chosen ? 'on' : ''}" data-min="${m}">${m} Min.</button>`).join('')}
+          <button class="chip ${chosen === null ? 'on' : ''}" data-min="open">⏱️ Stoppuhr</button></div>
+        <p class="small muted" data-open-hint ${chosen === null ? '' : 'hidden'}>Stoppuhr: ohne Zeitziel einfach loslegen – die Zeit läuft mit, bis du beendest.${roomId ? '' : ' Ist alles geschafft, kommt die nächste passende Aufgabe dazu.'}</p>
+        <div class="btn-row">
+          <button class="btn" data-cancel>Abbrechen</button>
+          <button class="btn primary" data-go>▶ Los geht's</button>
+        </div>`, (el) => {
+        el.querySelectorAll('[data-scope]').forEach((b) => {
+          b.onclick = () => { roomId = b.dataset.scope || null; if (chosen !== null) chosen = undefined; draw(); };
+        });
+        el.querySelectorAll('[data-min]').forEach((b) => {
+          b.onclick = () => {
+            chosen = b.dataset.min === 'open' ? null : +b.dataset.min;
+            el.querySelectorAll('[data-min]').forEach((x) => x.classList.toggle('on', x === b));
+            el.querySelector('[data-open-hint]').hidden = chosen !== null;
+          };
+        });
+        el.querySelector('[data-cancel]').onclick = closeModal;
+        el.querySelector('[data-go]').onclick = () => { closeModal(); startSession(chosen, roomId); };
       });
-      el.querySelector('[data-cancel]').onclick = closeModal;
-      el.querySelector('[data-go]').onclick = () => { closeModal(); startSession(chosen); };
-    });
+    };
+    draw();
   }
 
-  /** Startet den Timer – `minutes` = null: Stoppuhr ohne festes Ende. */
-  function startSession(minutes) {
+  /**
+   * Startet den Timer – `minutes` = null: Stoppuhr ohne festes Ende.
+   * `roomId`: den ganzen Raum putzen (sonst den heutigen Plan).
+   */
+  function startSession(minutes, roomId) {
     const today = S.today();
     const plan = S.planDays(state, today, 1, doneTodayIds())[0];
     // Der Timer nimmt meine Aufgaben – die anderen putzen mit ihrem eigenen Handy.
     plan.items = myPlanItems(plan);
+    let addedIds = [];
+    if (roomId) {
+      // Ganzer Raum: alle Aufgaben des Raums. Heute fällige zählen als geplant (wandern sonst
+      // auf morgen), alle anderen sind „Extra“ und bleiben einfach, wie sie sind.
+      const planned = new Map(plan.items.filter((i) => i.task.roomId === roomId).map((i) => [i.task.id, i.memberId]));
+      const tasks = roomSessionTasks(roomId);
+      plan.items = tasks.map((t) => ({ task: t, memberId: planned.has(t.id) ? planned.get(t.id) : (t.assignee || null) }));
+      addedIds = tasks.filter((t) => !planned.has(t.id)).map((t) => t.id);
+    }
+    // Sinnvolle Reihenfolge: Laufenlassen zuerst, dann Raum für Raum, im Raum Schritt für Schritt.
+    const ordered = [].concat(...S.cleaningOrder(plan.items.map((i) => i.task), state.rooms).map((g) => g.tasks.map((x) => x.task.id)));
+    plan.items.sort((a, b) => ordered.indexOf(a.task.id) - ordered.indexOf(b.task.id));
     state.session = {
       day: today,
       startedAt: Date.now(),
@@ -433,7 +476,8 @@
       lastMark: 0,
       taskIds: plan.items.map((i) => i.task.id),
       bonusIds: [],
-      addedIds: [],
+      addedIds,
+      roomId: roomId || null,
       doneIds: [],
       times: {},
       memberIds: Object.fromEntries(plan.items.map((i) => [i.task.id, i.memberId])),
@@ -451,6 +495,7 @@
   /** Nimmt die nächste passende Aufgabe dazu. Gibt false zurück, wenn keine mehr passt. */
   function addBonusTask(silent) {
     const s = state.session;
+    if (s.roomId) return false; // Ganzer Raum: es kommt nichts aus anderen Räumen dazu.
     // Stoppuhr: kein Zeitlimit – passende Aufgaben bis zu einer Stunde.
     const remainingMin = s.open ? 60 : sessionRemaining(s) / MIN;
     if (remainingMin < 2) return false;
@@ -813,8 +858,9 @@
     const added = new Set(s.addedIds || []);
     const extra = sessionExtraIds(s);
     const ids = s.taskIds.filter((id) => task(id));
-    // Offene zuerst, Erledigte unten.
-    ids.sort((a, b) => (doneSet.has(a) ? 1 : 0) - (doneSet.has(b) ? 1 : 0));
+    // Raum für Raum in sinnvoller Reihenfolge; Erledigtes bleibt durchgestrichen an seinem Platz.
+    const groups = S.cleaningOrder(ids.map(task), state.rooms);
+    const nextId = [].concat(...groups.map((g) => g.tasks)).map((x) => x.task.id).find((id) => !doneSet.has(id));
 
     let banner = '';
     if (s.timeUp) {
@@ -828,7 +874,7 @@
           </div></div>`;
     } else if (s.allDone) {
       banner = `<div class="session-banner good">
-          <strong>🎉 Alles geschafft!</strong>
+          <strong>🎉 ${s.roomId && room(s.roomId) ? `${esc(room(s.roomId).name)} ist komplett sauber!` : 'Alles geschafft!'}</strong>
           <p>${s.open ? 'Gerade passt nichts mehr – du hast heute richtig was geschafft.' : 'Für die restliche Zeit passt nichts mehr – genieß die Pause.'}</p>
           <button class="btn primary block" data-action="session-finish">Fertig</button></div>`;
     }
@@ -847,34 +893,45 @@
         </div>`}
       </header>
       ${banner}
-      <ul class="list session-list">${ids.map((id) => {
-        const t = task(id);
-        const r = room(t.roomId);
-        const isDone = doneSet.has(id);
-        const willMove = s.timeUp && !isDone && !extra.has(id) && !t.plantId;
-        return `<li class="row ${isDone ? 'done' : ''}" data-action="session-toggle" data-id="${id}">
+      <ul class="list session-list">${groups.map((g) => {
+        const gr = g.roomId && room(g.roomId);
+        const left = g.tasks.filter((x) => !doneSet.has(x.task.id)).length;
+        const head = g.roomId === null
+          ? `<li class="session-room"><span>▶️ Zuerst starten</span><small>läuft von selbst, während du weiterputzt</small></li>`
+          : `<li class="session-room ${left ? '' : 'done'}"><span>${gr ? `${gr.icon} ${esc(gr.name)}` : '🏠 Sonstiges'}</span><small>${left ? `${g.tasks.length - left}/${g.tasks.length}` : '✓ fertig'}</small></li>`;
+        return head + g.tasks.map(({ task: t, step }) => sessionRow(t.id, step)).join('');
+      }).join('')}</ul>
+      <div class="btn-row">
+        <button class="btn" data-action="session-add">＋ Aufgabe hinzufügen</button>
+        <button class="btn" data-action="session-shop">🛒 Etwas ist leer</button>
+        ${!s.roomId && !s.timeUp && sessionRemaining(s) > 2 * MIN ? '<button class="btn" data-action="session-more">✨ Passende vorschlagen</button>' : ''}
+      </div>
+      <p class="muted small center">Tipp: Hake jede Aufgabe direkt ab, wenn du fertig bist – so lernt die App, wie lange du wirklich brauchst.</p>`;
+
+    function sessionRow(id, step) {
+      const t = task(id);
+      const r = room(t.roomId);
+      const isDone = doneSet.has(id);
+      const isNext = id === nextId && !s.timeUp;
+      const willMove = s.timeUp && !isDone && !extra.has(id) && !t.plantId;
+      const st = S.CLEAN_STEPS[step];
+      return `<li class="row ${isDone ? 'done' : ''} ${isNext ? 'next' : ''}" data-action="session-toggle" data-id="${id}">
           <span class="check ${isDone ? 'checked' : ''}" aria-hidden="true">${isDone ? '✓' : ''}</span>
           ${taskIcon(t, r)}
           <div class="row-main">
             <div class="row-title">${esc(t.name)}</div>
             ${t.note ? `<div class="row-note">${esc(t.note)}</div>` : ''}
-            <div class="row-sub">${r ? esc(r.name) : ''} ·
+            <div class="row-sub">${isNext ? '<span class="badge good">Als Nächstes</span> ' : ''}${st.icon} ${st.label} ·
               ${isDone ? `in ${fmtClock(s.times[id] || 0)} Min.` : `ca. ${fmtMinutes(S.estimate(t))}`}
               ${bonus.has(id) ? '<span class="badge good">Bonus ✨</span>' : ''}
-              ${added.has(id) ? '<span class="badge">Dazugenommen</span>' : ''}
-              ${task(id).oneOff ? '<span class="badge">Einmalig</span>' : ''}
+              ${added.has(id) && !s.roomId ? '<span class="badge">Dazugenommen</span>' : ''}
+              ${t.oneOff ? '<span class="badge">Einmalig</span>' : ''}
               ${willMove ? '<span class="badge">→ morgen</span>' : ''}</div>
           </div>
           ${avatar(member(s.memberIds[id]))}
           ${isDone ? '' : `<button class="icon-btn" data-action="session-swap" data-id="${id}" title="Tauschen">⇄</button>`}
         </li>`;
-      }).join('')}</ul>
-      <div class="btn-row">
-        <button class="btn" data-action="session-add">＋ Aufgabe hinzufügen</button>
-        <button class="btn" data-action="session-shop">🛒 Etwas ist leer</button>
-        ${!s.timeUp && sessionRemaining(s) > 2 * MIN ? '<button class="btn" data-action="session-more">✨ Passende vorschlagen</button>' : ''}
-      </div>
-      <p class="muted small center">Tipp: Hake jede Aufgabe direkt ab, wenn du fertig bist – so lernt die App, wie lange du wirklich brauchst.</p>`;
+    }
   }
 
   function ensureSessionTimer() {
